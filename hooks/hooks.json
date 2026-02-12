@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "type": "PreToolUse",
+      "command": "node scripts/check-permissions.js",
+      "timeout": 5000
+    }
+  ]
+}

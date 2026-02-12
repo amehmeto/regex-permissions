@@ -1,0 +1,221 @@
+{
+  "_comment": [
+    "Example regexPermissions config — place inside your .claude/settings.local.json",
+    "This example shows a migration from 327 literal rules down to ~41 regex rules.",
+    "Includes community patterns from GitHub issue #13154."
+  ],
+
+  "regexPermissions": {
+    "deny": [
+      {
+        "tool": "Bash",
+        "command": "^git\\s+(commit|push|merge|rebase)\\s+.*--no-verify",
+        "reason": "Never bypass git hooks"
+      },
+      {
+        "tool": "Bash",
+        "command": "^git\\s+push\\s+.*--force",
+        "reason": "No force push — use --force-with-lease instead"
+      },
+      {
+        "tool": "Bash",
+        "command": "^git\\s+(reset\\s+--hard|clean\\s+-f)",
+        "reason": "Destructive git operations blocked"
+      },
+      {
+        "tool": "Bash",
+        "command": "^rm\\s+-rf\\s+(/|~|\\$HOME)",
+        "reason": "Dangerous recursive delete"
+      },
+      {
+        "tool": "Edit|Write",
+        "path": "\\.env(\\.local|\\.production)?$",
+        "reason": "Do not modify environment secret files"
+      },
+      {
+        "tool": "Bash",
+        "command": "^(sudo|chmod\\s+777|chown)",
+        "reason": "No privilege escalation"
+      }
+    ],
+
+    "ask": [
+      {
+        "tool": "Bash",
+        "command": "[;|&`$#]",
+        "reason": "Shell metacharacters detected — review chained/piped command (RyanSaxe pattern)"
+      },
+      {
+        "tool": "Bash",
+        "command": "^git\\s+push",
+        "reason": "Confirm before pushing to remote"
+      },
+      {
+        "tool": "Bash",
+        "command": "^(npm|yarn|pnpm)\\s+(publish|unpublish)",
+        "reason": "Publishing to registry requires approval"
+      },
+      {
+        "tool": "Bash",
+        "command": "^(docker|podman)\\s+(rm|rmi|system\\s+prune)",
+        "reason": "Container cleanup requires approval"
+      },
+      {
+        "tool": "Bash",
+        "command": "^gh\\s+(pr|issue)\\s+(create|close|merge|comment|edit|delete|reopen)",
+        "reason": "GitHub mutations require approval"
+      },
+      {
+        "tool": "Bash",
+        "command": "^aws\\s+\\S+\\s+(delete|remove|terminate|put|create|update|modify)-",
+        "reason": "AWS write operations require approval"
+      }
+    ],
+
+    "allow": [
+      {
+        "_comment": "Universal --help pattern (RyanSaxe)",
+        "tool": "Bash",
+        "command": "^\\S+\\s+--help$",
+        "reason": "Any command --help is safe"
+      },
+      {
+        "_comment": "Manpages",
+        "tool": "Bash",
+        "command": "^man\\s+",
+        "reason": "Reading manpages is safe"
+      },
+
+      {
+        "_comment": "Git read-only operations",
+        "tool": "Bash",
+        "command": "^git\\s+(status|log|diff|show|branch|tag|remote|stash\\s+list|ls-files|rev-parse|describe|shortlog|blame|reflog)"
+      },
+      {
+        "_comment": "Git staging and committing (without --no-verify, blocked above)",
+        "tool": "Bash",
+        "command": "^git\\s+(add|commit|stash\\s+(push|pop|apply|drop))"
+      },
+      {
+        "_comment": "Git checkout/switch/fetch/pull",
+        "tool": "Bash",
+        "command": "^git\\s+(checkout|switch|fetch|pull|rebase|merge|cherry-pick)"
+      },
+      {
+        "_comment": "Git with -C flag for path override (kojiromike pattern)",
+        "tool": "Bash",
+        "command": "^git\\s+(-C\\s+\\S+\\s+)?(grep|log|diff|show|status|blame)\\s"
+      },
+
+      {
+        "_comment": "GitHub CLI read operations",
+        "tool": "Bash",
+        "command": "^gh\\s+(pr|issue|run|release|repo)\\s+(view|list|status|checks|diff)"
+      },
+      {
+        "_comment": "GitHub API read operations",
+        "tool": "Bash",
+        "command": "^gh\\s+api\\s+(-H\\s+\\S+\\s+)*repos/"
+      },
+
+      {
+        "_comment": "AWS CLI read-only operations (blimmer pattern)",
+        "tool": "Bash",
+        "command": "^aws\\s+\\S+\\s+(get|list|describe|head)-"
+      },
+      {
+        "_comment": "AWS STS / identity",
+        "tool": "Bash",
+        "command": "^aws\\s+sts\\s+get-caller-identity"
+      },
+
+      {
+        "_comment": "Node/npm read operations",
+        "tool": "Bash",
+        "command": "^(npm|yarn|pnpm)\\s+(list|ls|info|view|outdated|audit|why|explain|pack\\s+--dry-run)"
+      },
+      {
+        "_comment": "npm install / ci",
+        "tool": "Bash",
+        "command": "^(npm|yarn|pnpm)\\s+(install|ci|add|remove|uninstall)\\b"
+      },
+      {
+        "_comment": "npm/yarn run scripts",
+        "tool": "Bash",
+        "command": "^(npm|yarn|pnpm)\\s+run\\s+"
+      },
+      {
+        "_comment": "npx execution",
+        "tool": "Bash",
+        "command": "^npx\\s+"
+      },
+
+      {
+        "_comment": "Node, ts-node, tsx execution",
+        "tool": "Bash",
+        "command": "^(node|ts-node|tsx)\\s+"
+      },
+
+      {
+        "_comment": "Common dev tools",
+        "tool": "Bash",
+        "command": "^(jest|vitest|pytest|cargo\\s+test|go\\s+test|make\\s+test|npm\\s+test)"
+      },
+      {
+        "_comment": "Build tools",
+        "tool": "Bash",
+        "command": "^(tsc|esbuild|webpack|vite|rollup|next\\s+build|cargo\\s+build|go\\s+build|make)\\b"
+      },
+      {
+        "_comment": "Linters and formatters",
+        "tool": "Bash",
+        "command": "^(eslint|prettier|black|ruff|clippy|golint|rubocop)"
+      },
+
+      {
+        "_comment": "Misc safe read-only commands",
+        "tool": "Bash",
+        "command": "^(ls|pwd|which|whoami|date|uname|env|printenv|cat|head|tail|wc|sort|uniq|diff|file|stat|du|df|id|hostname)\\b"
+      },
+      {
+        "_comment": "jq / yq data processing",
+        "tool": "Bash",
+        "command": "^(jq|yq)\\s+"
+      },
+      {
+        "_comment": "curl / wget (read)",
+        "tool": "Bash",
+        "command": "^(curl|wget)\\s+"
+      },
+
+      {
+        "_comment": "Docker read-only",
+        "tool": "Bash",
+        "command": "^(docker|podman)\\s+(ps|images|logs|inspect|stats|top|port|network\\s+ls|volume\\s+ls)"
+      },
+
+      {
+        "_comment": "Editor tools always allowed on non-secret files",
+        "tool": "Edit|Write|Read",
+        "path": "\\.(ts|tsx|js|jsx|py|rs|go|java|rb|css|scss|html|json|yaml|yml|toml|md|txt|sh|sql|graphql|proto|xml|svg|vue|svelte)$"
+      },
+
+      {
+        "_comment": "Glob and Grep always allowed",
+        "tool": "Glob|Grep"
+      },
+
+      {
+        "_comment": "WebFetch for documentation sites",
+        "tool": "WebFetch",
+        "url": "(docs\\.|developer\\.|devdocs\\.|wiki\\.|man7\\.org|stackoverflow\\.com|github\\.com)",
+        "flags": "i"
+      },
+
+      {
+        "_comment": "WebSearch always allowed",
+        "tool": "WebSearch"
+      }
+    ]
+  }
+}

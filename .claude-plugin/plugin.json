@@ -1,0 +1,6 @@
+{
+  "name": "regex-permissions",
+  "version": "1.0.0",
+  "description": "Regex-based permission rules for Claude Code — collapse hundreds of literal allow/deny/ask rules into compact patterns",
+  "author": "TiedSiren51"
+}
