@@ -16,7 +16,7 @@
     ],
 
     "ask": [
-      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected (RyanSaxe pattern)" },
+      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" },
       { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing to remote" },
       { "rule": "Bash(^(npm|yarn|pnpm)\\s+(publish|unpublish))", "reason": "Publishing to registry requires approval" },
       { "rule": "Bash(^(docker|podman)\\s+(rm|rmi|system\\s+prune))", "reason": "Container cleanup requires approval" },

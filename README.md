@@ -1,14 +1,10 @@
 # regex-permissions
 
-A Claude Code plugin that replaces hundreds of literal allow/deny/ask permission rules with compact regex patterns. Collapse 327 rules into ~41.
+A Claude Code plugin that lets you write permission rules using regex instead of wildcards.
 
 ## Installation
 
 ```bash
-# Clone or copy to any directory
-git clone <repo-url> ~/regex-permissions
-
-# Use with Claude Code
 claude --plugin-dir ~/regex-permissions
 ```
 
@@ -22,7 +18,7 @@ Or add to your project's `.claude/plugins.json`:
 
 ## Configuration
 
-Add a `regexPermissions` key to your existing `.claude/settings.local.json` (project-level) or `~/.claude/settings.local.json` (global). Both are loaded and merged additively.
+Add a `regexPermissions` key to your `.claude/settings.local.json` (project-level) or `~/.claude/settings.local.json` (global). Both are loaded and merged additively.
 
 ```json
 {
@@ -42,13 +38,13 @@ Add a `regexPermissions` key to your existing `.claude/settings.local.json` (pro
 }
 ```
 
-### Rule Syntax
+## Rule Syntax
 
 Rules use the same `Tool(pattern)` format as native Claude Code permissions, but with regex instead of wildcards:
 
 ```
-Native:   Bash(git status)        ← wildcard
-Plugin:   Bash(^git\\s+status)    ← regex
+Native:   Bash(git status)        <- wildcard
+Plugin:   Bash(^git\\s+status)    <- regex
 ```
 
 **String form** — for most rules:
@@ -61,7 +57,7 @@ Plugin:   Bash(^git\\s+status)    ← regex
 { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing", "flags": "i" }
 ```
 
-### Tool Matching
+## Tool Matching
 
 The tool name (before the parentheses) is itself a regex, so `Edit|Write` matches both tools:
 
@@ -80,45 +76,36 @@ The pattern inside parentheses matches against the tool's primary content:
 | WebSearch  | `query`          |
 | MCP tools  | First of: `command`, `file_path`, `url`, `pattern` |
 
-### Evaluation Order
+## Evaluation Order
 
 1. **Deny** — first matching deny rule blocks the action
 2. **Ask** — first matching ask rule prompts the user
 3. **Allow** — first matching allow rule auto-approves
 4. **Passthrough** — no match = native Claude Code permissions handle it
 
-## Community Patterns
+## Examples
 
-Patterns from [GitHub issue #13154](https://github.com/anthropics/claude-code/issues/13154):
-
-### Universal `--help` (RyanSaxe)
-
+Allow any command's `--help` flag with a single rule:
 ```json
 "Bash(^\\S+\\s+--help$)"
 ```
 
-### Shell metacharacter detection (RyanSaxe)
-
+Prompt for approval when shell chaining or piping is detected:
 ```json
 { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }
 ```
 
-### AWS CLI read-only (blimmer)
-
+Allow all AWS read-only operations across every service:
 ```json
 "Bash(^aws\\s+\\S+\\s+(get|list|describe)-)"
 ```
 
-### Git with `-C` flag (kojiromike)
-
+Handle optional git flags without over-matching:
 ```json
 "Bash(^git\\s+(-C\\s+\\S+\\s+)?grep\\s)"
 ```
 
-## Migration Guide
-
-**Before** (327 literal rules):
-
+Collapse many similar rules into one — **before**:
 ```json
 {
   "permissions": {
@@ -134,8 +121,7 @@ Patterns from [GitHub issue #13154](https://github.com/anthropics/claude-code/is
 }
 ```
 
-**After** (~41 regex rules):
-
+**After**:
 ```json
 {
   "regexPermissions": {
@@ -147,26 +133,26 @@ Patterns from [GitHub issue #13154](https://github.com/anthropics/claude-code/is
 }
 ```
 
-See `regex-permissions.example.json` for a complete annotated example.
+See `regex-permissions.example.json` for a full annotated config.
 
 ## Error Handling
 
 The plugin **fails open** — if anything goes wrong, native permissions take over:
 
-- Missing `regexPermissions` key → passthrough
-- Invalid JSON → passthrough
-- Invalid regex → that rule is skipped
-- Script crash → 5-second timeout, passthrough
+- Missing `regexPermissions` key -> passthrough
+- Invalid JSON -> passthrough
+- Invalid regex -> that rule is skipped
+- Script crash -> 5-second timeout, passthrough
 
 ## Regex Tips
 
 **Anchor patterns** with `^` to prevent partial matches:
 ```
-^git\s+push    ✓  matches "git push" at start
-git\s+push     ✗  also matches "digit push"
+^git\s+push    matches "git push" at start
+git\s+push     also matches "digit push"
 ```
 
-**Escape in JSON** — backslashes are doubled: `\\s`, `\\b`, `\\.`
+**Escape in JSON** — backslashes must be doubled: `\\s`, `\\b`, `\\.`
 
 **Alternation** for multiple options: `^git\\s+(status|log|diff)`
 
