@@ -15,6 +15,8 @@
       { "rule": "Bash(^(sudo|chmod\\s+777|chown))", "reason": "No privilege escalation" }
     ],
 
+    "_note_on_overlap": "git push appears in both deny (--force) and ask (all pushes). Deny runs first, so --force is blocked; other pushes fall through to ask.",
+
     "ask": [
       { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" },
       { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing to remote" },

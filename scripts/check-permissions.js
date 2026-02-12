@@ -38,6 +38,7 @@ function getPrimaryContent(toolName, toolInput) {
 // Parse a rule entry — supports both formats:
 //   String:  "Bash(^git\\s+push)"
 //   Object:  { "rule": "Bash(^git\\s+push)", "reason": "...", "flags": "i" }
+// Returns null for malformed entries.
 function parseRule(entry) {
   const raw = typeof entry === "string" ? entry : entry?.rule;
   if (!raw) return null;
@@ -45,11 +46,12 @@ function parseRule(entry) {
   const match = raw.match(/^([^(]+)\((.+)\)$/s);
   if (!match) return null;
 
+  const flags = typeof entry === "object" ? entry.flags : undefined;
+
   return {
-    tool: match[1],
-    pattern: match[2],
+    toolRe: toRegex(match[1]),          // tool name — always case-sensitive
+    contentRe: toRegex(match[2], flags), // content pattern — respects flags
     reason: typeof entry === "object" ? entry.reason : undefined,
-    flags: typeof entry === "object" ? entry.flags : undefined,
   };
 }
 
@@ -75,27 +77,32 @@ function mergeConfigs(a, b) {
   };
 }
 
+// Pre-parse all rules once after config load
+function prepareRules(config) {
+  return {
+    deny: (config.deny || []).map(parseRule).filter(Boolean),
+    ask: (config.ask || []).map(parseRule).filter(Boolean),
+    allow: (config.allow || []).map(parseRule).filter(Boolean),
+  };
+}
+
 // --- Evaluation ---
 
 function ruleMatches(parsed, toolName, content) {
-  if (!parsed) return false;
-
   // Check tool name
-  const toolRe = toRegex(parsed.tool, parsed.flags);
-  if (!toolRe || !toolRe.test(toolName)) return false;
+  if (!parsed.toolRe || !parsed.toolRe.test(toolName)) return false;
 
-  // Check primary content pattern
+  // Check primary content pattern — null content only matches if no content regex
+  if (!parsed.contentRe) return true;
   if (content == null) return false;
-  const contentRe = toRegex(parsed.pattern, parsed.flags);
-  return contentRe ? contentRe.test(content) : true; // invalid regex → fail open
+  return parsed.contentRe.test(content);
 }
 
 function evaluate(rules, toolName, toolInput) {
   const content = getPrimaryContent(toolName, toolInput);
 
   // Deny first
-  for (const entry of rules.deny || []) {
-    const parsed = parseRule(entry);
+  for (const parsed of rules.deny) {
     if (ruleMatches(parsed, toolName, content)) {
       return {
         decision: "deny",
@@ -105,8 +112,7 @@ function evaluate(rules, toolName, toolInput) {
   }
 
   // Then ask
-  for (const entry of rules.ask || []) {
-    const parsed = parseRule(entry);
+  for (const parsed of rules.ask) {
     if (ruleMatches(parsed, toolName, content)) {
       return {
         decision: "ask",
@@ -116,8 +122,7 @@ function evaluate(rules, toolName, toolInput) {
   }
 
   // Then allow
-  for (const entry of rules.allow || []) {
-    const parsed = parseRule(entry);
+  for (const parsed of rules.allow) {
     if (ruleMatches(parsed, toolName, content)) {
       return { decision: "allow" };
     }
@@ -163,17 +168,18 @@ async function main() {
   const globalConfig = loadConfig(globalConfigPath);
 
   const merged = mergeConfigs(projectConfig, globalConfig);
+  const rules = prepareRules(merged);
 
   if (
-    !merged.deny?.length &&
-    !merged.ask?.length &&
-    !merged.allow?.length
+    !rules.deny.length &&
+    !rules.ask.length &&
+    !rules.allow.length
   ) {
     process.stdout.write("{}\n");
     return;
   }
 
-  const result = evaluate(merged, tool_name, tool_input);
+  const result = evaluate(rules, tool_name, tool_input);
 
   if (!result) {
     process.stdout.write("{}\n");
