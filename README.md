@@ -24,7 +24,7 @@ Add a `regexPermissions` key to your `.claude/settings.local.json` (project-leve
 {
   "regexPermissions": {
     "deny": [
-      { "rule": "Bash(^git\\s+push\\s+.*--force)", "reason": "No force push" }
+      { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
     "ask": [
       { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }

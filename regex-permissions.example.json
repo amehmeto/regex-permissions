@@ -8,7 +8,7 @@
   "regexPermissions": {
     "deny": [
       { "rule": "Bash(^git\\s+(commit|push|merge|rebase)\\s+.*--no-verify)", "reason": "Never bypass git hooks" },
-      { "rule": "Bash(^git\\s+push\\s+.*--force)", "reason": "No force push — use --force-with-lease" },
+      { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push — use --force-with-lease" },
       { "rule": "Bash(^git\\s+(reset\\s+--hard|clean\\s+-f))", "reason": "Destructive git operations blocked" },
       { "rule": "Bash(^rm\\s+-rf\\s+(/|~|\\$HOME))", "reason": "Dangerous recursive delete" },
       { "rule": "Edit|Write(\\.env(\\.local|\\.production)?$)", "reason": "Do not modify environment secret files" },

@@ -16,11 +16,12 @@ fs.writeFileSync(
   JSON.stringify({
     regexPermissions: {
       deny: [
-        { rule: "Bash(^git\\s+push\\s+.*--force)", reason: "No force push" },
+        { rule: "Bash(^git\\s+push\\s+.*--force\\b(?!-))", reason: "No force push" },
         { rule: "Edit|Write(\\.env$)", reason: "No .env edits" },
       ],
       ask: [
         { rule: "Bash([;|&`$#])", reason: "Shell metacharacters" },
+        { rule: "Bash(^git\\s+push)", reason: "Confirm push" },
       ],
       allow: [
         "Bash(^\\S+\\s+--help$)",
@@ -49,6 +50,7 @@ function decision(result) {
 
 let passed = 0;
 let failed = 0;
+let skipped = 0;
 
 function test(name, input, expected) {
   const result = run({ ...input, cwd: TMP });
@@ -68,9 +70,9 @@ console.log("regex-permissions tests\n");
 test("deny: git push --force",
   { tool_name: "Bash", tool_input: { command: "git push --force origin main" } },
   "deny");
-test("deny: git push --force-with-lease still matches --force",
+test("ask: git push --force-with-lease is not denied, falls to ask",
   { tool_name: "Bash", tool_input: { command: "git push --force-with-lease" } },
-  "deny");
+  "ask");
 test("deny: Edit .env",
   { tool_name: "Edit", tool_input: { file_path: "/project/.env" } },
   "deny");
@@ -147,6 +149,7 @@ fs.writeFileSync(path.join(TMP2, ".claude", "settings.local.json"), "{}");
     } catch { return false; }
   })();
   if (globalHasConfig) {
+    skipped++;
     console.log(`  skip  passthrough: no project config (global config exists)`);
   } else if (got === "passthrough") {
     passed++;
@@ -158,7 +161,32 @@ fs.writeFileSync(path.join(TMP2, ".claude", "settings.local.json"), "{}");
 }
 fs.rmSync(TMP2, { recursive: true, force: true });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
+// --- Invalid regex is skipped (fail open) ---
+const TMP3 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-bad-"));
+fs.mkdirSync(path.join(TMP3, ".claude"), { recursive: true });
+fs.writeFileSync(
+  path.join(TMP3, ".claude", "settings.local.json"),
+  JSON.stringify({
+    regexPermissions: {
+      deny: [{ rule: "Bash(+)" }],
+    },
+  })
+);
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: "anything" }, cwd: TMP3 });
+  const got = decision(result);
+  if (got === "passthrough") {
+    passed++;
+    console.log("  pass  passthrough: invalid content regex is skipped");
+  } else {
+    failed++;
+    console.log(`  FAIL  passthrough: invalid content regex — expected passthrough, got ${got}`);
+  }
+}
+fs.rmSync(TMP3, { recursive: true, force: true });
+
+const total = passed + failed + skipped;
+console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped (${total} total)\n`);
 
 // Cleanup
 fs.rmSync(TMP, { recursive: true, force: true });

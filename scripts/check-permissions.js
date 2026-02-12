@@ -48,9 +48,15 @@ function parseRule(entry) {
 
   const flags = typeof entry === "object" ? entry.flags : undefined;
 
+  const toolRe = toRegex(match[1]);
+  const contentRe = toRegex(match[2], flags);
+
+  // If either regex failed to compile, skip this rule entirely (fail open)
+  if (!toolRe || !contentRe) return null;
+
   return {
-    toolRe: toRegex(match[1]),          // tool name — always case-sensitive
-    contentRe: toRegex(match[2], flags), // content pattern — respects flags
+    toolRe,
+    contentRe,
     reason: typeof entry === "object" ? entry.reason : undefined,
   };
 }
@@ -89,11 +95,7 @@ function prepareRules(config) {
 // --- Evaluation ---
 
 function ruleMatches(parsed, toolName, content) {
-  // Check tool name
-  if (!parsed.toolRe || !parsed.toolRe.test(toolName)) return false;
-
-  // Check primary content pattern — null content only matches if no content regex
-  if (!parsed.contentRe) return true;
+  if (!parsed.toolRe.test(toolName)) return false;
   if (content == null) return false;
   return parsed.contentRe.test(content);
 }
