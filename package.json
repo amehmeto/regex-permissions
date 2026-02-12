@@ -1,0 +1,12 @@
+{
+  "name": "regex-permissions",
+  "version": "0.9.0",
+  "description": "Regex-based permission rules for Claude Code",
+  "author": "amehmeto",
+  "engines": {
+    "node": ">=14"
+  },
+  "scripts": {
+    "test": "node test.js"
+  }
+}

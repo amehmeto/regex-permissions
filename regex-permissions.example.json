@@ -10,7 +10,7 @@
       { "rule": "Bash(^git\\s+(commit|push|merge|rebase)\\s+.*--no-verify)", "reason": "Never bypass git hooks" },
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push — use --force-with-lease" },
       { "rule": "Bash(^git\\s+(reset\\s+--hard|clean\\s+-f))", "reason": "Destructive git operations blocked" },
-      { "rule": "Bash(^rm\\s+-rf\\s+(/|~|\\$HOME))", "reason": "Dangerous recursive delete" },
+      { "rule": "Bash(^rm\\s+-rf\\s+(/|~|\\$HOME)(\\s|$))", "reason": "Dangerous recursive delete" },
       { "rule": "Edit|Write(\\.env(\\.local|\\.production)?$)", "reason": "Do not modify environment secret files" },
       { "rule": "Bash(^(sudo|chmod\\s+777|chown))", "reason": "No privilege escalation" }
     ],
@@ -18,12 +18,14 @@
     "_note_on_overlap": "git push appears in both deny (--force) and ask (all pushes). Deny runs first, so --force is blocked; other pushes fall through to ask.",
 
     "ask": [
-      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" },
+      { "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" },
       { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing to remote" },
       { "rule": "Bash(^(npm|yarn|pnpm)\\s+(publish|unpublish))", "reason": "Publishing to registry requires approval" },
       { "rule": "Bash(^(docker|podman)\\s+(rm|rmi|system\\s+prune))", "reason": "Container cleanup requires approval" },
       { "rule": "Bash(^gh\\s+(pr|issue)\\s+(create|close|merge|comment|edit|delete|reopen))", "reason": "GitHub mutations require approval" },
-      { "rule": "Bash(^aws\\s+\\S+\\s+(delete|remove|terminate|put|create|update|modify)-)", "reason": "AWS write operations require approval" }
+      { "rule": "Bash(^aws\\s+\\S+\\s+(delete|remove|terminate|put|create|update|modify)-)", "reason": "AWS write operations require approval" },
+      { "rule": "Bash(^npx\\s+)", "reason": "npx can execute arbitrary packages" },
+      { "rule": "Bash(^(curl|wget)\\s+)", "reason": "Network requests can exfiltrate data" }
     ],
 
     "allow": [
@@ -32,7 +34,7 @@
 
       "Bash(^git\\s+(status|log|diff|show|branch|tag|remote|stash\\s+list|ls-files|rev-parse|describe|shortlog|blame|reflog))",
       "Bash(^git\\s+(add|commit|stash\\s+(push|pop|apply|drop)))",
-      "Bash(^git\\s+(checkout|switch|fetch|pull|rebase|merge|cherry-pick))",
+      "Bash(^git\\s+(checkout|switch|fetch|pull|rebase|merge|cherry-pick|reset))",
       "Bash(^git\\s+(-C\\s+\\S+\\s+)?(grep|log|diff|show|status|blame)\\s)",
 
       "Bash(^gh\\s+(pr|issue|run|release|repo)\\s+(view|list|status|checks|diff))",
@@ -44,7 +46,6 @@
       "Bash(^(npm|yarn|pnpm)\\s+(list|ls|info|view|outdated|audit|why|explain|pack\\s+--dry-run))",
       "Bash(^(npm|yarn|pnpm)\\s+(install|ci|add|remove|uninstall)\\b)",
       "Bash(^(npm|yarn|pnpm)\\s+run\\s+)",
-      "Bash(^npx\\s+)",
 
       "Bash(^(node|ts-node|tsx)\\s+)",
       "Bash(^(jest|vitest|pytest|cargo\\s+test|go\\s+test|make\\s+test|npm\\s+test))",
@@ -53,7 +54,6 @@
 
       "Bash(^(ls|pwd|which|whoami|date|uname|env|printenv|cat|head|tail|wc|sort|uniq|diff|file|stat|du|df|id|hostname)\\b)",
       "Bash(^(jq|yq)\\s+)",
-      "Bash(^(curl|wget)\\s+)",
 
       "Bash(^(docker|podman)\\s+(ps|images|logs|inspect|stats|top|port|network\\s+ls|volume\\s+ls))",
 

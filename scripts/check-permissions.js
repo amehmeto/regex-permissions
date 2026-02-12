@@ -5,7 +5,20 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
+// --- Logging ---
+
+const DEBUG = process.env.REGEX_PERMISSIONS_DEBUG === "1";
+function warn(msg) { process.stderr.write(`[regex-permissions] ${msg}\n`); }
+function debug(msg) { if (DEBUG) warn(msg); }
+
 // --- Helpers ---
+
+// ReDoS heuristic: reject groups containing a single quantified token followed by
+// a group quantifier. Catches (a+)+, (.+)*, (\d+)+, (\s*)+ etc. but allows
+// complex groups like (-H\s+\S+\s+)* that have structural anchoring.
+function isSafeRegex(pattern) {
+  return !/\((\.|\\.|[^)\\])[+*]\)[+*{]/.test(pattern);
+}
 
 const regexCache = new Map();
 
@@ -13,6 +26,10 @@ function toRegex(pattern, flags) {
   const key = `${flags || ""}:${pattern}`;
   if (regexCache.has(key)) return regexCache.get(key);
   try {
+    if (!isSafeRegex(pattern)) {
+      warn(`Skipping unsafe regex (possible ReDoS): ${pattern}`);
+      return null;
+    }
     const re = new RegExp(pattern, flags || "");
     regexCache.set(key, re);
     return re;
@@ -46,13 +63,22 @@ function parseRule(entry) {
   const match = raw.match(/^([^(]+)\((.+)\)$/s);
   if (!match) return null;
 
-  const flags = typeof entry === "object" ? entry.flags : undefined;
+  let flags = typeof entry === "object" ? entry.flags : undefined;
 
-  const toolRe = toRegex(match[1]);
+  // Strip "g" flag — it causes stateful matching via lastIndex
+  if (flags && flags.includes("g")) {
+    warn(`Stripping "g" flag from rule (causes stateful matching): ${raw}`);
+    flags = flags.replace(/g/g, "") || undefined;
+  }
+
+  // Anchor tool regex to prevent substring matches (e.g. "Edit" matching "NotebookEdit")
+  const toolRe = toRegex(`^(?:${match[1]})$`);
   const contentRe = toRegex(match[2], flags);
 
-  // If either regex failed to compile, skip this rule entirely (fail open)
-  if (!toolRe || !contentRe) return null;
+  if (!toolRe || !contentRe) {
+    warn(`Skipping invalid rule: ${raw}`);
+    return null;
+  }
 
   return {
     toolRe,
@@ -85,11 +111,22 @@ function mergeConfigs(a, b) {
 
 // Pre-parse all rules once after config load
 function prepareRules(config) {
-  return {
-    deny: (config.deny || []).map(parseRule).filter(Boolean),
-    ask: (config.ask || []).map(parseRule).filter(Boolean),
-    allow: (config.allow || []).map(parseRule).filter(Boolean),
+  const safeArray = (key) => {
+    const val = config[key];
+    if (val == null) return [];
+    if (!Array.isArray(val)) {
+      warn(`"${key}" must be an array, got ${typeof val} — skipping`);
+      return [];
+    }
+    return val;
   };
+  const parsed = {
+    deny: safeArray("deny").map(parseRule).filter(Boolean),
+    ask: safeArray("ask").map(parseRule).filter(Boolean),
+    allow: safeArray("allow").map(parseRule).filter(Boolean),
+  };
+  debug(`Loaded ${parsed.deny.length} deny, ${parsed.ask.length} ask, ${parsed.allow.length} allow rules`);
+  return parsed;
 }
 
 // --- Evaluation ---
@@ -100,12 +137,28 @@ function ruleMatches(parsed, toolName, content) {
   return parsed.contentRe.test(content);
 }
 
+// For deny/ask: match if the full content or ANY individual line matches
+function matchesAnyLine(parsed, toolName, content, lines) {
+  if (ruleMatches(parsed, toolName, content)) return true;
+  if (lines) {
+    for (const line of lines) {
+      if (ruleMatches(parsed, toolName, line)) return true;
+    }
+  }
+  return false;
+}
+
 function evaluate(rules, toolName, toolInput) {
   const content = getPrimaryContent(toolName, toolInput);
 
-  // Deny first
+  // Split multiline content for per-line checking
+  const lines = (content && content.includes("\n"))
+    ? content.split("\n").map(l => l.trim()).filter(Boolean)
+    : null;
+
+  // Deny first — any matching line triggers deny
   for (const parsed of rules.deny) {
-    if (ruleMatches(parsed, toolName, content)) {
+    if (matchesAnyLine(parsed, toolName, content, lines)) {
       return {
         decision: "deny",
         reason: parsed.reason || "Blocked by regex-permissions deny rule",
@@ -113,9 +166,9 @@ function evaluate(rules, toolName, toolInput) {
     }
   }
 
-  // Then ask
+  // Then ask — any matching line triggers ask
   for (const parsed of rules.ask) {
-    if (ruleMatches(parsed, toolName, content)) {
+    if (matchesAnyLine(parsed, toolName, content, lines)) {
       return {
         decision: "ask",
         reason: parsed.reason || "Flagged by regex-permissions ask rule",
@@ -123,7 +176,15 @@ function evaluate(rules, toolName, toolInput) {
     }
   }
 
-  // Then allow
+  // Then allow — for multiline, every non-empty line must match an allow rule
+  if (lines) {
+    for (const line of lines) {
+      const lineAllowed = rules.allow.some(p => ruleMatches(p, toolName, line));
+      if (!lineAllowed) return null; // passthrough — not all lines covered
+    }
+    return { decision: "allow" };
+  }
+
   for (const parsed of rules.allow) {
     if (ruleMatches(parsed, toolName, content)) {
       return { decision: "allow" };
@@ -189,8 +250,10 @@ async function main() {
   }
 
   const output = { hookSpecificOutput: { permissionDecision: result.decision } };
-  if (result.reason) output.hookSpecificOutput.reason = result.reason;
+  if (result.reason) output.hookSpecificOutput.permissionDecisionReason = result.reason;
   process.stdout.write(JSON.stringify(output) + "\n");
 }
 
-main();
+main().catch(() => {
+  process.stdout.write("{}\n");
+});

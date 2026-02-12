@@ -1,9 +1,17 @@
 {
-  "hooks": [
-    {
-      "type": "PreToolUse",
-      "command": "node scripts/check-permissions.js",
-      "timeout": 5000
-    }
-  ]
+  "description": "Regex-based permission rules for Claude Code tools",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-permissions.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -18,9 +18,10 @@ fs.writeFileSync(
       deny: [
         { rule: "Bash(^git\\s+push\\s+.*--force\\b(?!-))", reason: "No force push" },
         { rule: "Edit|Write(\\.env$)", reason: "No .env edits" },
+        { rule: "Bash(^sudo)", reason: "No sudo" },
       ],
       ask: [
-        { rule: "Bash([;|&`$#])", reason: "Shell metacharacters" },
+        { rule: "Bash([;|&`$#\\n])", reason: "Shell metacharacters" },
         { rule: "Bash(^git\\s+push)", reason: "Confirm push" },
       ],
       allow: [
@@ -133,6 +134,63 @@ test("passthrough: Read tool (no matching rule)",
   { tool_name: "Read", tool_input: { file_path: "/project/src/index.ts" } },
   "passthrough");
 
+// --- Tool name anchoring: prevent substring matches ---
+test("passthrough: NotebookEdit does not match Edit|Write rule",
+  { tool_name: "NotebookEdit", tool_input: { file_path: "/project/.env" } },
+  "passthrough");
+test("passthrough: BashExecutor does not match Bash rules",
+  { tool_name: "BashExecutor", tool_input: { command: "git push --force" } },
+  "passthrough");
+test("passthrough: MyGlob does not match Glob|Grep rule",
+  { tool_name: "MyGlob", tool_input: { pattern: "*.ts" } },
+  "passthrough");
+
+// --- Multiline command handling ---
+test("deny: multiline with sudo on line 2 is denied",
+  { tool_name: "Bash", tool_input: { command: "git status\nsudo rm -rf /" } },
+  "deny");
+test("deny: multiline with denied command on line 3",
+  { tool_name: "Bash", tool_input: { command: "ls\necho hello\nsudo apt install" } },
+  "deny");
+test("ask: multiline triggers metacharacter ask via newline",
+  { tool_name: "Bash", tool_input: { command: "echo hello\necho world" } },
+  "ask");
+
+// Test per-line allow logic with a config that doesn't have \n in ask
+const TMP_ML = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-ml-"));
+fs.mkdirSync(path.join(TMP_ML, ".claude"), { recursive: true });
+fs.writeFileSync(
+  path.join(TMP_ML, ".claude", "settings.local.json"),
+  JSON.stringify({
+    regexPermissions: {
+      deny: [{ rule: "Bash(^sudo)", reason: "No sudo" }],
+      allow: ["Bash(^git\\s+(status|log|diff))"],
+    },
+  })
+);
+{
+  const mlRun = (cmd) => {
+    const r = run({ tool_name: "Bash", tool_input: { command: cmd }, cwd: TMP_ML });
+    return decision(r);
+  };
+  const tests = [
+    ["deny: multiline per-line deny (no \\n ask)", "git status\nsudo rm -rf /", "deny"],
+    ["allow: multiline all lines allowed", "git status\ngit log", "allow"],
+    ["passthrough: multiline one line not covered", "git status\nsome-random-cmd", "passthrough"],
+  ];
+  for (const [name, cmd, expected] of tests) {
+    const got = mlRun(cmd);
+    if (got === expected) {
+      passed++;
+      console.log(`  pass  ${name}`);
+    } else {
+      failed++;
+      console.log(`  FAIL  ${name} — expected ${expected}, got ${got}`);
+    }
+  }
+}
+fs.rmSync(TMP_ML, { recursive: true, force: true });
+
 // --- Error resilience ---
 // Use a temp dir with an empty settings file (no regexPermissions key)
 const TMP2 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-empty-"));
@@ -184,6 +242,83 @@ fs.writeFileSync(
   }
 }
 fs.rmSync(TMP3, { recursive: true, force: true });
+
+// --- ReDoS protection ---
+const TMP4 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-redos-"));
+fs.mkdirSync(path.join(TMP4, ".claude"), { recursive: true });
+fs.writeFileSync(
+  path.join(TMP4, ".claude", "settings.local.json"),
+  JSON.stringify({
+    regexPermissions: {
+      deny: [{ rule: "Bash((a+)+$)" }],
+    },
+  })
+);
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: "aaaaaaaaaaaa" }, cwd: TMP4 });
+  const got = decision(result);
+  if (got === "passthrough") {
+    passed++;
+    console.log("  pass  passthrough: ReDoS pattern is rejected");
+  } else {
+    failed++;
+    console.log(`  FAIL  passthrough: ReDoS pattern — expected passthrough, got ${got}`);
+  }
+}
+fs.rmSync(TMP4, { recursive: true, force: true });
+
+// --- Config validation: non-array deny ---
+const TMP5 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-badcfg-"));
+fs.mkdirSync(path.join(TMP5, ".claude"), { recursive: true });
+fs.writeFileSync(
+  path.join(TMP5, ".claude", "settings.local.json"),
+  JSON.stringify({
+    regexPermissions: {
+      deny: "not-an-array",
+      allow: [{ rule: "Bash(^ls)" }],
+    },
+  })
+);
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: "ls -la" }, cwd: TMP5 });
+  const got = decision(result);
+  if (got === "allow") {
+    passed++;
+    console.log("  pass  allow: non-array deny is skipped, allow still works");
+  } else {
+    failed++;
+    console.log(`  FAIL  allow: non-array deny — expected allow, got ${got}`);
+  }
+}
+fs.rmSync(TMP5, { recursive: true, force: true });
+
+// --- g flag stripping ---
+const TMP6 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-gflag-"));
+fs.mkdirSync(path.join(TMP6, ".claude"), { recursive: true });
+fs.writeFileSync(
+  path.join(TMP6, ".claude", "settings.local.json"),
+  JSON.stringify({
+    regexPermissions: {
+      allow: [{ rule: "WebFetch(example\\.com)", flags: "gi" }],
+    },
+  })
+);
+{
+  // Call twice — with "g" flag, second call would fail due to lastIndex state.
+  // Since "g" is stripped, both calls should return allow.
+  const r1 = run({ tool_name: "WebFetch", tool_input: { url: "https://EXAMPLE.COM/1" }, cwd: TMP6 });
+  const r2 = run({ tool_name: "WebFetch", tool_input: { url: "https://EXAMPLE.COM/2" }, cwd: TMP6 });
+  const got1 = decision(r1);
+  const got2 = decision(r2);
+  if (got1 === "allow" && got2 === "allow") {
+    passed++;
+    console.log("  pass  allow: g flag stripped, case-insensitive still works");
+  } else {
+    failed++;
+    console.log(`  FAIL  allow: g flag — expected allow+allow, got ${got1}+${got2}`);
+  }
+}
+fs.rmSync(TMP6, { recursive: true, force: true });
 
 const total = passed + failed + skipped;
 console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped (${total} total)\n`);

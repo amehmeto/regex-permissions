@@ -1,6 +1,10 @@
 {
   "name": "regex-permissions",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "description": "Regex-based permission rules for Claude Code — collapse hundreds of literal allow/deny/ask rules into compact patterns",
-  "author": "amehmeto"
+  "author": {
+    "name": "amehmeto"
+  },
+  "repository": "https://github.com/amehmeto/regex-permissions",
+  "keywords": ["permissions", "security", "regex", "hooks"]
 }

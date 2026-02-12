@@ -2,6 +2,8 @@
 
 A Claude Code plugin that lets you write permission rules using regex instead of wildcards.
 
+Requires **Node.js >= 14**.
+
 ## Installation
 
 ```bash
@@ -16,9 +18,11 @@ Or add to your project's `.claude/plugins.json`:
 }
 ```
 
+Then add your rules to `.claude/settings.local.json` (project-level) or `~/.claude/settings.local.json` (global). See [Configuration](#configuration) below.
+
 ## Configuration
 
-Add a `regexPermissions` key to your `.claude/settings.local.json` (project-level) or `~/.claude/settings.local.json` (global). Both are loaded and merged additively.
+Add a `regexPermissions` key to your settings file. Both project-level and global configs are loaded and merged additively.
 
 ```json
 {
@@ -27,7 +31,7 @@ Add a `regexPermissions` key to your `.claude/settings.local.json` (project-leve
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
     "ask": [
-      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }
+      { "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" }
     ],
     "allow": [
       "Bash(^\\S+\\s+--help$)",
@@ -38,13 +42,15 @@ Add a `regexPermissions` key to your `.claude/settings.local.json` (project-leve
 }
 ```
 
+See `regex-permissions.example.json` for a full annotated config with rules for git, GitHub CLI, AWS, Docker, package managers, and more.
+
 ## Rule Syntax
 
-Rules use the same `Tool(pattern)` format as native Claude Code permissions, but with regex instead of wildcards:
+Rules use the `Tool(pattern)` format — the tool name and content pattern are both regexes:
 
 ```
-Native:   Bash(git status)        <- wildcard
-Plugin:   Bash(^git\\s+status)    <- regex
+Tool name regex ──┐    ┌── Content regex
+                  Bash(^git\\s+status)
 ```
 
 **String form** — for most rules:
@@ -57,15 +63,17 @@ Plugin:   Bash(^git\\s+status)    <- regex
 { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing", "flags": "i" }
 ```
 
+The `flags` field applies to the content regex only (tool names are always case-sensitive). The `g` flag is automatically stripped to prevent stateful matching bugs.
+
 ## Tool Matching
 
-The tool name (before the parentheses) is itself a regex, so `Edit|Write` matches both tools:
+The tool name portion is an **exact match** — `Bash` matches only `Bash`, not `BashExecutor` or `MyBash`. Use alternation for multiple tools:
 
 ```json
 "Edit|Write|Read(\\.(ts|js|py)$)"
 ```
 
-The pattern inside parentheses matches against the tool's primary content:
+The content pattern matches against the tool's primary field:
 
 | Tool       | Pattern matches  |
 |------------|------------------|
@@ -83,6 +91,17 @@ The pattern inside parentheses matches against the tool's primary content:
 3. **Allow** — first matching allow rule auto-approves
 4. **Passthrough** — no match = native Claude Code permissions handle it
 
+Deny always wins. A deny rule cannot be overridden by an ask or allow rule.
+
+## Multiline Protection
+
+Commands containing newlines are evaluated per-line:
+
+- **Deny/Ask**: if *any* line matches a deny or ask rule, that decision applies to the whole command
+- **Allow**: *every* line must independently match an allow rule, otherwise the command falls through to native permissions
+
+This prevents bypass attacks like embedding `sudo rm -rf /` on line 2 of an otherwise-allowed command.
+
 ## Examples
 
 Allow any command's `--help` flag with a single rule:
@@ -90,9 +109,9 @@ Allow any command's `--help` flag with a single rule:
 "Bash(^\\S+\\s+--help$)"
 ```
 
-Prompt for approval when shell chaining or piping is detected:
+Prompt for approval when shell chaining, piping, or newlines are detected:
 ```json
-{ "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }
+{ "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" }
 ```
 
 Allow all AWS read-only operations across every service:
@@ -100,12 +119,7 @@ Allow all AWS read-only operations across every service:
 "Bash(^aws\\s+\\S+\\s+(get|list|describe)-)"
 ```
 
-Handle optional git flags without over-matching:
-```json
-"Bash(^git\\s+(-C\\s+\\S+\\s+)?grep\\s)"
-```
-
-Collapse many similar rules into one — **before**:
+Collapse many similar rules into one — **before** (native wildcards):
 ```json
 {
   "permissions": {
@@ -121,7 +135,7 @@ Collapse many similar rules into one — **before**:
 }
 ```
 
-**After**:
+**After** (regex):
 ```json
 {
   "regexPermissions": {
@@ -133,16 +147,33 @@ Collapse many similar rules into one — **before**:
 }
 ```
 
-See `regex-permissions.example.json` for a full annotated config.
-
 ## Error Handling
 
 The plugin **fails open** — if anything goes wrong, native permissions take over:
 
-- Missing `regexPermissions` key -> passthrough
-- Invalid JSON -> passthrough
-- Invalid regex -> that rule is skipped
-- Script crash -> 5-second timeout, passthrough
+- Missing `regexPermissions` key → passthrough
+- Invalid JSON → passthrough
+- Invalid regex → that rule is skipped (warning on stderr)
+- Unsafe regex (ReDoS) → that rule is skipped (warning on stderr)
+- Non-array config value → skipped (warning on stderr)
+- Script crash → 5-second timeout, passthrough
+
+## Debugging
+
+Set the environment variable to see which rules are loaded:
+
+```bash
+REGEX_PERMISSIONS_DEBUG=1 claude --plugin-dir ~/regex-permissions
+```
+
+Warnings (invalid rules, unsafe regexes, bad config) are always printed to stderr regardless of debug mode.
+
+You can also test rules directly without Claude Code:
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"."}' \
+  | node scripts/check-permissions.js
+```
 
 ## Regex Tips
 
@@ -158,8 +189,4 @@ git\s+push     also matches "digit push"
 
 **Word boundaries** to prevent partial matches: `^npm\\s+test\\b`
 
-**Avoid nested quantifiers** (ReDoS risk): prefer `\\S+` over `.*` where possible.
-
-## License
-
-MIT
+**Avoid nested quantifiers** (ReDoS risk) — patterns like `(a+)+` are automatically rejected. Prefer `\\S+` over `.*` where possible.
