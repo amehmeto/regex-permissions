@@ -21,13 +21,6 @@ function toRegex(pattern, flags) {
   }
 }
 
-function matches(rule, field, value) {
-  if (!rule[field]) return true; // field not specified — matches everything
-  if (value == null) return false; // rule requires field but input lacks it
-  const re = toRegex(rule[field], rule.flags);
-  return re ? re.test(value) : true; // invalid regex → fail open
-}
-
 // Auto-detect the primary content field for each tool type
 function getPrimaryContent(toolName, toolInput) {
   if (!toolInput) return undefined;
@@ -40,6 +33,24 @@ function getPrimaryContent(toolName, toolInput) {
   if (toolName === "WebSearch") return toolInput.query;
   // MCP tools or unknown — try common fields
   return toolInput.command || toolInput.file_path || toolInput.url || toolInput.pattern;
+}
+
+// Parse a rule entry — supports both formats:
+//   String:  "Bash(^git\\s+push)"
+//   Object:  { "rule": "Bash(^git\\s+push)", "reason": "...", "flags": "i" }
+function parseRule(entry) {
+  const raw = typeof entry === "string" ? entry : entry?.rule;
+  if (!raw) return null;
+
+  const match = raw.match(/^([^(]+)\((.+)\)$/s);
+  if (!match) return null;
+
+  return {
+    tool: match[1],
+    pattern: match[2],
+    reason: typeof entry === "object" ? entry.reason : undefined,
+    flags: typeof entry === "object" ? entry.flags : undefined,
+  };
 }
 
 // --- Config loading ---
@@ -66,43 +77,48 @@ function mergeConfigs(a, b) {
 
 // --- Evaluation ---
 
-function evaluate(rules, toolName, toolInput) {
-  const command = getPrimaryContent(toolName, toolInput);
-  const filePath = toolInput?.file_path;
-  const url = toolInput?.url;
+function ruleMatches(parsed, toolName, content) {
+  if (!parsed) return false;
 
-  function ruleMatches(rule) {
-    return (
-      matches(rule, "tool", toolName) &&
-      matches(rule, "command", command) &&
-      matches(rule, "path", filePath) &&
-      matches(rule, "url", url)
-    );
-  }
+  // Check tool name
+  const toolRe = toRegex(parsed.tool, parsed.flags);
+  if (!toolRe || !toolRe.test(toolName)) return false;
+
+  // Check primary content pattern
+  if (content == null) return false;
+  const contentRe = toRegex(parsed.pattern, parsed.flags);
+  return contentRe ? contentRe.test(content) : true; // invalid regex → fail open
+}
+
+function evaluate(rules, toolName, toolInput) {
+  const content = getPrimaryContent(toolName, toolInput);
 
   // Deny first
-  for (const rule of rules.deny || []) {
-    if (ruleMatches(rule)) {
+  for (const entry of rules.deny || []) {
+    const parsed = parseRule(entry);
+    if (ruleMatches(parsed, toolName, content)) {
       return {
         decision: "deny",
-        reason: rule.reason || "Blocked by regex-permissions deny rule",
+        reason: parsed.reason || "Blocked by regex-permissions deny rule",
       };
     }
   }
 
   // Then ask
-  for (const rule of rules.ask || []) {
-    if (ruleMatches(rule)) {
+  for (const entry of rules.ask || []) {
+    const parsed = parseRule(entry);
+    if (ruleMatches(parsed, toolName, content)) {
       return {
         decision: "ask",
-        reason: rule.reason || "Flagged by regex-permissions ask rule",
+        reason: parsed.reason || "Flagged by regex-permissions ask rule",
       };
     }
   }
 
   // Then allow
-  for (const rule of rules.allow || []) {
-    if (ruleMatches(rule)) {
+  for (const entry of rules.allow || []) {
+    const parsed = parseRule(entry);
+    if (ruleMatches(parsed, toolName, content)) {
       return { decision: "allow" };
     }
   }
@@ -120,7 +136,6 @@ async function main() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    // Can't parse input — fail open
     process.stdout.write("{}\n");
     return;
   }
@@ -149,7 +164,6 @@ async function main() {
 
   const merged = mergeConfigs(projectConfig, globalConfig);
 
-  // If no regex permissions configured anywhere, passthrough
   if (
     !merged.deny?.length &&
     !merged.ask?.length &&
@@ -162,48 +176,13 @@ async function main() {
   const result = evaluate(merged, tool_name, tool_input);
 
   if (!result) {
-    // No match — passthrough
     process.stdout.write("{}\n");
     return;
   }
 
-  if (result.decision === "deny") {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          permissionDecision: "deny",
-          reason: result.reason,
-        },
-      }) + "\n"
-    );
-    return;
-  }
-
-  if (result.decision === "ask") {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          permissionDecision: "ask",
-          reason: result.reason,
-        },
-      }) + "\n"
-    );
-    return;
-  }
-
-  if (result.decision === "allow") {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          permissionDecision: "allow",
-        },
-      }) + "\n"
-    );
-    return;
-  }
-
-  // Fallback — should not reach here
-  process.stdout.write("{}\n");
+  const output = { hookSpecificOutput: { permissionDecision: result.decision } };
+  if (result.reason) output.hookSpecificOutput.reason = result.reason;
+  process.stdout.write(JSON.stringify(output) + "\n");
 }
 
 main();
