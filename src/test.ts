@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-"use strict";
 
 import { execFileSync } from "child_process";
 import fs from "fs";

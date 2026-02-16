@@ -4,8 +4,6 @@
       "Bash(npm test:*)",
       "Bash(npm run build:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm install:*)",
-      "Bash(git checkout:*)",
       "Bash(git add:*)",
       "Bash(git status)",
       "Bash(git diff:*)",
@@ -18,6 +16,10 @@
       "Bash(gh issue create:*)",
       "Bash(gh release create:*)",
       "WebSearch"
+    ],
+    "ask": [
+      "Bash(npm install:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

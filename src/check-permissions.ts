@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-"use strict";
 
 import fs from "fs";
 import path from "path";
@@ -246,7 +245,7 @@ async function main(): Promise<void> {
   let input: HookInput;
   try {
     const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
     return;
