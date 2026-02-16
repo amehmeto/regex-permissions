@@ -1,12 +1,34 @@
 #!/usr/bin/env node
 "use strict";
 
-const { execFileSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
+import { execFileSync } from "child_process";
+import fs from "fs";
+import path from "path";
+import os from "os";
 
-const SCRIPT = path.join(__dirname, "scripts", "check-permissions.js");
+interface ToolInput {
+  command?: string;
+  file_path?: string;
+  url?: string;
+  pattern?: string;
+  query?: string;
+}
+
+interface TestInput {
+  tool_name: string;
+  tool_input: ToolInput;
+  cwd?: string;
+}
+
+interface HookSpecificOutput {
+  permissionDecision?: string;
+}
+
+interface HookOutput {
+  hookSpecificOutput?: HookSpecificOutput;
+}
+
+const SCRIPT = path.join(__dirname, "check-permissions.js");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-test-"));
 const CONFIG_DIR = path.join(TMP, ".claude");
 
@@ -36,7 +58,7 @@ fs.writeFileSync(
   })
 );
 
-function run(input) {
+function run(input: TestInput): HookOutput {
   const result = execFileSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
@@ -46,7 +68,7 @@ function run(input) {
   return trimmed ? JSON.parse(trimmed) : {};
 }
 
-function decision(result) {
+function decision(result: HookOutput): string {
   return result?.hookSpecificOutput?.permissionDecision || "passthrough";
 }
 
@@ -54,7 +76,7 @@ let passed = 0;
 let failed = 0;
 let skipped = 0;
 
-function test(name, input, expected) {
+function test(name: string, input: Omit<TestInput, "cwd">, expected: string): void {
   const result = run({ ...input, cwd: TMP });
   const got = decision(result);
   if (got === expected) {
@@ -170,11 +192,11 @@ fs.writeFileSync(
   })
 );
 {
-  const mlRun = (cmd) => {
+  const mlRun = (cmd: string): string => {
     const r = run({ tool_name: "Bash", tool_input: { command: cmd }, cwd: TMP_ML });
     return decision(r);
   };
-  const tests = [
+  const tests: [string, string, string][] = [
     ["deny: multiline per-line deny (no \\n ask)", "git status\nsudo rm -rf /", "deny"],
     ["allow: multiline all lines allowed", "git status\ngit log", "allow"],
     ["passthrough: multiline one line not covered", "git status\nsome-random-cmd", "passthrough"],
@@ -201,7 +223,7 @@ fs.writeFileSync(path.join(TMP2, ".claude", "settings.local.json"), "{}");
   const result = run({ tool_name: "Bash", tool_input: { command: "git push --force" }, cwd: TMP2 });
   const got = decision(result);
   // May not be passthrough if global ~/.claude/settings.local.json has regexPermissions
-  const globalHasConfig = (() => {
+  const globalHasConfig = ((): boolean => {
     try {
       const g = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".claude", "settings.local.json"), "utf8"));
       return !!g.regexPermissions;

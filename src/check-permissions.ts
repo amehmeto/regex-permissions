@@ -1,30 +1,75 @@
 #!/usr/bin/env node
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
+import fs from "fs";
+import path from "path";
+import os from "os";
+
+// --- Types ---
+
+interface RuleEntry {
+  rule: string;
+  reason?: string;
+  flags?: string;
+}
+
+interface ParsedRule {
+  toolRe: RegExp;
+  contentRe: RegExp;
+  reason?: string;
+}
+
+interface RegexPermissionsConfig {
+  deny?: (string | RuleEntry)[];
+  ask?: (string | RuleEntry)[];
+  allow?: (string | RuleEntry)[];
+}
+
+interface PreparedRules {
+  deny: ParsedRule[];
+  ask: ParsedRule[];
+  allow: ParsedRule[];
+}
+
+interface HookInput {
+  tool_name: string;
+  tool_input: Record<string, string>;
+  cwd?: string;
+}
+
+interface HookOutput {
+  hookSpecificOutput: {
+    hookEventName: string;
+    permissionDecision: string;
+    permissionDecisionReason?: string;
+  };
+}
+
+interface EvalResult {
+  decision: "deny" | "ask" | "allow";
+  reason?: string;
+}
 
 // --- Logging ---
 
 const DEBUG = process.env.REGEX_PERMISSIONS_DEBUG === "1";
-function warn(msg) { process.stderr.write(`[regex-permissions] ${msg}\n`); }
-function debug(msg) { if (DEBUG) warn(msg); }
+function warn(msg: string): void { process.stderr.write(`[regex-permissions] ${msg}\n`); }
+function debug(msg: string): void { if (DEBUG) warn(msg); }
 
 // --- Helpers ---
 
 // ReDoS heuristic: reject groups containing a single quantified token followed by
 // a group quantifier. Catches (a+)+, (.+)*, (\d+)+, (\s*)+ etc. but allows
 // complex groups like (-H\s+\S+\s+)* that have structural anchoring.
-function isSafeRegex(pattern) {
+function isSafeRegex(pattern: string): boolean {
   return !/\((\.|\\.|[^)\\])[+*]\)[+*{]/.test(pattern);
 }
 
-const regexCache = new Map();
+const regexCache = new Map<string, RegExp>();
 
-function toRegex(pattern, flags) {
+function toRegex(pattern: string, flags?: string): RegExp | null {
   const key = `${flags || ""}:${pattern}`;
-  if (regexCache.has(key)) return regexCache.get(key);
+  if (regexCache.has(key)) return regexCache.get(key)!;
   try {
     if (!isSafeRegex(pattern)) {
       warn(`Skipping unsafe regex (possible ReDoS): ${pattern}`);
@@ -39,7 +84,7 @@ function toRegex(pattern, flags) {
 }
 
 // Auto-detect the primary content field for each tool type
-function getPrimaryContent(toolName, toolInput) {
+function getPrimaryContent(toolName: string, toolInput: Record<string, string> | undefined): string | undefined {
   if (!toolInput) return undefined;
   if (toolName === "Bash") return toolInput.command;
   if (toolName === "Edit" || toolName === "Write" || toolName === "Read")
@@ -56,7 +101,7 @@ function getPrimaryContent(toolName, toolInput) {
 //   String:  "Bash(^git\\s+push)"
 //   Object:  { "rule": "Bash(^git\\s+push)", "reason": "...", "flags": "i" }
 // Returns null for malformed entries.
-function parseRule(entry) {
+function parseRule(entry: string | RuleEntry): ParsedRule | null {
   const raw = typeof entry === "string" ? entry : entry?.rule;
   if (!raw) return null;
 
@@ -89,7 +134,7 @@ function parseRule(entry) {
 
 // --- Config loading ---
 
-function loadConfig(filePath) {
+function loadConfig(filePath: string): RegexPermissionsConfig | null {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw);
@@ -99,7 +144,7 @@ function loadConfig(filePath) {
   }
 }
 
-function mergeConfigs(a, b) {
+function mergeConfigs(a: RegexPermissionsConfig | null, b: RegexPermissionsConfig | null): RegexPermissionsConfig {
   if (!a) return b || { deny: [], ask: [], allow: [] };
   if (!b) return a;
   return {
@@ -110,8 +155,8 @@ function mergeConfigs(a, b) {
 }
 
 // Pre-parse all rules once after config load
-function prepareRules(config) {
-  const safeArray = (key) => {
+function prepareRules(config: RegexPermissionsConfig): PreparedRules {
+  const safeArray = (key: keyof RegexPermissionsConfig): (string | RuleEntry)[] => {
     const val = config[key];
     if (val == null) return [];
     if (!Array.isArray(val)) {
@@ -120,10 +165,10 @@ function prepareRules(config) {
     }
     return val;
   };
-  const parsed = {
-    deny: safeArray("deny").map(parseRule).filter(Boolean),
-    ask: safeArray("ask").map(parseRule).filter(Boolean),
-    allow: safeArray("allow").map(parseRule).filter(Boolean),
+  const parsed: PreparedRules = {
+    deny: safeArray("deny").map(parseRule).filter((r): r is ParsedRule => r !== null),
+    ask: safeArray("ask").map(parseRule).filter((r): r is ParsedRule => r !== null),
+    allow: safeArray("allow").map(parseRule).filter((r): r is ParsedRule => r !== null),
   };
   debug(`Loaded ${parsed.deny.length} deny, ${parsed.ask.length} ask, ${parsed.allow.length} allow rules`);
   return parsed;
@@ -131,14 +176,14 @@ function prepareRules(config) {
 
 // --- Evaluation ---
 
-function ruleMatches(parsed, toolName, content) {
+function ruleMatches(parsed: ParsedRule, toolName: string, content: string | undefined): boolean {
   if (!parsed.toolRe.test(toolName)) return false;
   if (content == null) return false;
   return parsed.contentRe.test(content);
 }
 
 // For deny/ask: match if the full content or ANY individual line matches
-function matchesAnyLine(parsed, toolName, content, lines) {
+function matchesAnyLine(parsed: ParsedRule, toolName: string, content: string | undefined, lines: string[] | null): boolean {
   if (ruleMatches(parsed, toolName, content)) return true;
   if (lines) {
     for (const line of lines) {
@@ -148,7 +193,7 @@ function matchesAnyLine(parsed, toolName, content, lines) {
   return false;
 }
 
-function evaluate(rules, toolName, toolInput) {
+function evaluate(rules: PreparedRules, toolName: string, toolInput: Record<string, string>): EvalResult | null {
   const content = getPrimaryContent(toolName, toolInput);
 
   // Split multiline content for per-line checking
@@ -197,11 +242,11 @@ function evaluate(rules, toolName, toolInput) {
 
 // --- Main ---
 
-async function main() {
-  let input;
+async function main(): Promise<void> {
+  let input: HookInput;
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
     return;
@@ -245,7 +290,12 @@ async function main() {
     return;
   }
 
-  const output = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: result.decision } };
+  const output: HookOutput = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: result.decision,
+    },
+  };
   if (result.reason) output.hookSpecificOutput.permissionDecisionReason = result.reason;
   process.stdout.write(JSON.stringify(output) + "\n");
 }
