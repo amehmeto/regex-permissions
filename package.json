@@ -5,20 +5,14 @@
   "description": "Regex-based permission rules for Claude Code",
   "author": "amehmeto",
   "main": "dist/check-permissions.js",
-  "files": [
-    "dist/",
-    "hooks/",
-    ".claude-plugin/",
-    "regex-permissions.example.json",
-    "README.md"
-  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "build": "tsc",
     "test": "tsc && node dist/test.js",
-    "prepare": "tsc && husky"
+    "prepare": "husky",
+    "postinstall": "tsc"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
