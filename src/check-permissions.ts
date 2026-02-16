@@ -3,6 +3,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { HookInput, HookOutput } from "./types";
 
 // --- Types ---
 
@@ -28,20 +29,6 @@ interface PreparedRules {
   deny: ParsedRule[];
   ask: ParsedRule[];
   allow: ParsedRule[];
-}
-
-interface HookInput {
-  tool_name: string;
-  tool_input: Record<string, string>;
-  cwd?: string;
-}
-
-interface HookOutput {
-  hookSpecificOutput: {
-    hookEventName: string;
-    permissionDecision: string;
-    permissionDecisionReason?: string;
-  };
 }
 
 interface EvalResult {
@@ -295,7 +282,7 @@ async function main(): Promise<void> {
       permissionDecision: result.decision,
     },
   };
-  if (result.reason) output.hookSpecificOutput.permissionDecisionReason = result.reason;
+  if (result.reason) output.hookSpecificOutput!.permissionDecisionReason = result.reason;
   process.stdout.write(JSON.stringify(output) + "\n");
 }
 

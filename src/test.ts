@@ -4,6 +4,7 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { HookOutput } from "./types";
 
 interface ToolInput {
   command?: string;
@@ -17,14 +18,6 @@ interface TestInput {
   tool_name: string;
   tool_input: ToolInput;
   cwd?: string;
-}
-
-interface HookSpecificOutput {
-  permissionDecision?: string;
-}
-
-interface HookOutput {
-  hookSpecificOutput?: HookSpecificOutput;
 }
 
 const SCRIPT = path.join(__dirname, "check-permissions.js");

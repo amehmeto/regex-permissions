@@ -11,8 +11,7 @@
   "scripts": {
     "build": "tsc",
     "test": "tsc && node dist/test.js",
-    "prepare": "husky",
-    "postinstall": "tsc"
+    "prepare": "tsc && husky"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
