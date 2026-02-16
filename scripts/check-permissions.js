@@ -204,13 +204,11 @@ async function main() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    process.stdout.write("{}\n");
     return;
   }
 
   const { tool_name, tool_input, cwd } = input;
   if (!tool_name) {
-    process.stdout.write("{}\n");
     return;
   }
 
@@ -238,22 +236,18 @@ async function main() {
     !rules.ask.length &&
     !rules.allow.length
   ) {
-    process.stdout.write("{}\n");
     return;
   }
 
   const result = evaluate(rules, tool_name, tool_input);
 
   if (!result) {
-    process.stdout.write("{}\n");
     return;
   }
 
-  const output = { hookSpecificOutput: { permissionDecision: result.decision } };
+  const output = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: result.decision } };
   if (result.reason) output.hookSpecificOutput.permissionDecisionReason = result.reason;
   process.stdout.write(JSON.stringify(output) + "\n");
 }
 
-main().catch(() => {
-  process.stdout.write("{}\n");
-});
+main().catch(() => {});

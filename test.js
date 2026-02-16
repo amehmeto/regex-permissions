@@ -42,7 +42,8 @@ function run(input) {
     encoding: "utf8",
     timeout: 5000,
   });
-  return JSON.parse(result.trim());
+  const trimmed = result.trim();
+  return trimmed ? JSON.parse(trimmed) : {};
 }
 
 function decision(result) {
