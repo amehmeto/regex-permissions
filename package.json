@@ -1,8 +1,17 @@
 {
   "name": "regex-permissions",
   "version": "0.9.0",
+  "private": true,
   "description": "Regex-based permission rules for Claude Code",
   "author": "amehmeto",
+  "main": "dist/check-permissions.js",
+  "files": [
+    "dist/",
+    "hooks/",
+    ".claude-plugin/",
+    "regex-permissions.example.json",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },

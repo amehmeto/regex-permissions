@@ -2,7 +2,7 @@
 
 A Claude Code plugin that lets you write permission rules using regex instead of wildcards.
 
-Requires **Node.js >= 14**.
+Requires **Node.js >= 18**.
 
 ## Installation
 
@@ -172,7 +172,7 @@ You can also test rules directly without Claude Code:
 
 ```bash
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"."}' \
-  | node scripts/check-permissions.js
+  | node dist/check-permissions.js
 ```
 
 ## Regex Tips
