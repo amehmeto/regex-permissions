@@ -9,9 +9,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/check-permissions.js",
+    "build": "tsc",
     "test": "tsc && node dist/test.js",
-    "prepare": "tsc && chmod +x dist/check-permissions.js && husky"
+    "prepare": "tsc && husky"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
