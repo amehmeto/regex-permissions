@@ -19,7 +19,7 @@ interface ParsedRule {
   reason?: string;
 }
 
-interface RegexPermissionsConfig {
+interface PermissionsConfig {
   deny?: (string | RuleEntry)[];
   ask?: (string | RuleEntry)[];
   allow?: (string | RuleEntry)[];
@@ -94,6 +94,11 @@ function parseRule(entry: string | RuleEntry): ParsedRule | null {
   const match = raw.match(/^([^(]+)\((.+)\)$/s);
   if (!match) return null;
 
+  // Skip native wildcard entries like "Bash(npm test:*)" — the :* suffix
+  // is Claude Code's native wildcard syntax, not regex. Let the native
+  // permission system handle these.
+  if (match[2].endsWith(":*")) return null;
+
   let flags = typeof entry === "object" ? entry.flags : undefined;
 
   // Strip "g" flag — it causes stateful matching via lastIndex
@@ -120,17 +125,17 @@ function parseRule(entry: string | RuleEntry): ParsedRule | null {
 
 // --- Config loading ---
 
-function loadConfig(filePath: string): RegexPermissionsConfig | null {
+function loadConfig(filePath: string): PermissionsConfig | null {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw);
-    return parsed.regexPermissions || null;
+    return parsed.permissions || null;
   } catch {
     return null; // missing or malformed — fail open
   }
 }
 
-function mergeConfigs(a: RegexPermissionsConfig | null, b: RegexPermissionsConfig | null): RegexPermissionsConfig {
+function mergeConfigs(a: PermissionsConfig | null, b: PermissionsConfig | null): PermissionsConfig {
   if (!a) return b || { deny: [], ask: [], allow: [] };
   if (!b) return a;
   return {
@@ -141,8 +146,8 @@ function mergeConfigs(a: RegexPermissionsConfig | null, b: RegexPermissionsConfi
 }
 
 // Pre-parse all rules once after config load
-function prepareRules(config: RegexPermissionsConfig): PreparedRules {
-  const safeArray = (key: keyof RegexPermissionsConfig): (string | RuleEntry)[] => {
+function prepareRules(config: PermissionsConfig): PreparedRules {
+  const safeArray = (key: keyof PermissionsConfig): (string | RuleEntry)[] => {
     const val = config[key];
     if (val == null) return [];
     if (!Array.isArray(val)) {
@@ -243,21 +248,20 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Load project-level config
-  const projectConfigPath = cwd
-    ? path.join(cwd, ".claude", "settings.local.json")
-    : null;
-  const projectConfig = projectConfigPath
-    ? loadConfig(projectConfigPath)
+  // Load project-level configs (settings.json + settings.local.json)
+  const projectConfig = cwd
+    ? mergeConfigs(
+        loadConfig(path.join(cwd, ".claude", "settings.json")),
+        loadConfig(path.join(cwd, ".claude", "settings.local.json"))
+      )
     : null;
 
-  // Load global config
-  const globalConfigPath = path.join(
-    os.homedir(),
-    ".claude",
-    "settings.local.json"
+  // Load global configs (settings.json + settings.local.json)
+  const globalHome = path.join(os.homedir(), ".claude");
+  const globalConfig = mergeConfigs(
+    loadConfig(path.join(globalHome, "settings.json")),
+    loadConfig(path.join(globalHome, "settings.local.json"))
   );
-  const globalConfig = loadConfig(globalConfigPath);
 
   const merged = mergeConfigs(projectConfig, globalConfig);
   const rules = prepareRules(merged);
