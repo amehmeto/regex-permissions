@@ -1,11 +1,12 @@
 {
   "_comment": [
-    "Example regexPermissions config — place inside your .claude/settings.local.json",
-    "Syntax mirrors native permissions: Tool(regex_pattern)",
+    "Example permissions config — place inside your .claude/settings.local.json",
+    "Regex rules use the Tool(regex_pattern) format.",
+    "Native wildcard entries (e.g. Bash(npm test:*)) are silently skipped.",
     "Use object form { rule, reason, flags } when you need extras."
   ],
 
-  "regexPermissions": {
+  "permissions": {
     "deny": [
       { "rule": "Bash(^git\\s+(commit|push|merge|rebase)\\s+.*--no-verify)", "reason": "Never bypass git hooks" },
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push — use --force-with-lease" },

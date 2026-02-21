@@ -18,15 +18,15 @@ Or add to your project's `.claude/plugins.json`:
 }
 ```
 
-Then add your rules to `.claude/settings.local.json` (project-level) or `~/.claude/settings.local.json` (global). See [Configuration](#configuration) below.
+Then add your rules to `.claude/settings.json` or `.claude/settings.local.json` (project-level), or `~/.claude/settings.json` or `~/.claude/settings.local.json` (global). See [Configuration](#configuration) below.
 
 ## Configuration
 
-Add a `regexPermissions` key to your settings file. Both project-level and global configs are loaded and merged additively.
+Add your regex rules directly to the standard `permissions` key in your settings file. Both project-level and global configs are loaded and merged additively. All four files are read: `settings.json` and `settings.local.json` at both project and global levels.
 
 ```json
 {
-  "regexPermissions": {
+  "permissions": {
     "deny": [
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
@@ -41,6 +41,8 @@ Add a `regexPermissions` key to your settings file. Both project-level and globa
   }
 }
 ```
+
+**Coexistence with native permissions:** Native Claude Code wildcard entries (e.g. `Bash(npm test:*)`) use `:*` syntax that doesn't match the `Tool(regex)` format. These entries are silently skipped by regex-permissions and left for the native permission system to handle. This means you can have both regex rules and native wildcard rules in the same `permissions` block — regex-permissions evaluates what it understands, and everything else falls through to Claude Code's native system.
 
 See `regex-permissions.example.json` for a full annotated config with rules for git, GitHub CLI, AWS, Docker, package managers, and more.
 
@@ -138,7 +140,7 @@ Collapse many similar rules into one — **before** (native wildcards):
 **After** (regex):
 ```json
 {
-  "regexPermissions": {
+  "permissions": {
     "allow": [
       "Bash(^git\\s+(status|log|diff|show|branch|tag))",
       "Bash(^gh\\s+(pr|issue)\\s+(view|list|status))"
@@ -151,7 +153,7 @@ Collapse many similar rules into one — **before** (native wildcards):
 
 The plugin **fails open** — if anything goes wrong, native permissions take over:
 
-- Missing `regexPermissions` key → passthrough
+- Missing `permissions` key → passthrough
 - Invalid JSON → passthrough
 - Invalid regex → that rule is skipped (warning on stderr)
 - Unsafe regex (ReDoS) → that rule is skipped (warning on stderr)
