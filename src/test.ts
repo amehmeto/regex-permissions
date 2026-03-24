@@ -1,56 +1,22 @@
-#!/usr/bin/env node
-
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { HookOutput } from "./types";
-
-interface ToolInput {
-  command?: string;
-  file_path?: string;
-  url?: string;
-  pattern?: string;
-  query?: string;
-}
-
-interface TestInput {
-  tool_name: string;
-  tool_input: ToolInput;
-  cwd?: string;
-}
+import { HookInput, HookOutput } from "./types";
 
 const SCRIPT = path.join(__dirname, "check-permissions.js");
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-test-"));
-const CONFIG_DIR = path.join(TMP, ".claude");
 
-fs.mkdirSync(CONFIG_DIR, { recursive: true });
-fs.writeFileSync(
-  path.join(CONFIG_DIR, "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      deny: [
-        { rule: "Bash(^git\\s+push\\s+.*--force\\b(?!-))", reason: "No force push" },
-        { rule: "Edit|Write(\\.env$)", reason: "No .env edits" },
-        { rule: "Bash(^sudo)", reason: "No sudo" },
-      ],
-      ask: [
-        { rule: "Bash([;|&`$#\\n])", reason: "Shell metacharacters" },
-        { rule: "Bash(^git\\s+push)", reason: "Confirm push" },
-      ],
-      allow: [
-        "Bash(^\\S+\\s+--help$)",
-        "Bash(^git\\s+(status|log|diff))",
-        "Bash(^aws\\s+\\S+\\s+(get|list|describe)-)",
-        "Glob|Grep(.*)",
-        "WebSearch(.*)",
-        { rule: "WebFetch(example\\.com)", flags: "i" },
-      ],
-    },
-  })
-);
+function makeTmpWithConfig(config: object): string {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-"));
+  fs.mkdirSync(path.join(tmp, ".claude"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmp, ".claude", "settings.local.json"),
+    JSON.stringify(config),
+  );
+  return tmp;
+}
 
-function run(input: TestInput): HookOutput {
+function run(input: HookInput): HookOutput {
   const result = execFileSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
@@ -66,11 +32,9 @@ function decision(result: HookOutput): string {
 
 let passed = 0;
 let failed = 0;
-let skipped = 0;
 
-function test(name: string, input: Omit<TestInput, "cwd">, expected: string): void {
-  const result = run({ ...input, cwd: TMP });
-  const got = decision(result);
+function test(name: string, input: Omit<HookInput, "cwd">, expected: string, cwd: string): void {
+  const got = decision(run({ ...input, cwd }));
   if (got === expected) {
     passed++;
     console.log(`  pass  ${name}`);
@@ -80,337 +44,176 @@ function test(name: string, input: Omit<TestInput, "cwd">, expected: string): vo
   }
 }
 
+// --- Main test config ---
+
+const TMP = makeTmpWithConfig({
+  regexPermissions: {
+    deny: [
+      { rule: "Bash(^git\\s+push\\s+.*--force\\b(?!-))", reason: "No force push" },
+      { rule: "Edit|Write(\\.env$)", reason: "No .env edits" },
+      { rule: "Bash(^sudo)", reason: "No sudo" },
+    ],
+    ask: [
+      { rule: "Bash([;|&`$#])", reason: "Shell metacharacters" },
+      { rule: "Bash(^git\\s+push)", reason: "Confirm push" },
+    ],
+    allow: [
+      "Bash(^\\S+\\s+--help$)",
+      "Bash(^git\\s+(status|log|diff))",
+      "Bash(^aws\\s+\\S+\\s+(get|list|describe)-)",
+      "Glob|Grep(.*)",
+      "WebSearch(.*)",
+      { rule: "WebFetch(example\\.com)", flags: "i" },
+    ],
+  },
+});
+
 console.log("regex-permissions tests\n");
 
 // --- Deny ---
 test("deny: git push --force",
   { tool_name: "Bash", tool_input: { command: "git push --force origin main" } },
-  "deny");
-test("ask: git push --force-with-lease is not denied, falls to ask",
+  "deny", TMP);
+test("ask: git push --force-with-lease (negative lookahead avoids deny, falls to ask)",
   { tool_name: "Bash", tool_input: { command: "git push --force-with-lease" } },
-  "ask");
+  "ask", TMP);
 test("deny: Edit .env",
   { tool_name: "Edit", tool_input: { file_path: "/project/.env" } },
-  "deny");
+  "deny", TMP);
 test("deny: Write .env (tool regex Edit|Write)",
   { tool_name: "Write", tool_input: { file_path: "/project/.env" } },
-  "deny");
+  "deny", TMP);
+test("deny: sudo",
+  { tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } },
+  "deny", TMP);
 
 // --- Ask ---
 test("ask: pipe metacharacter",
   { tool_name: "Bash", tool_input: { command: "echo foo | bar" } },
-  "ask");
+  "ask", TMP);
 test("ask: semicolon metacharacter",
   { tool_name: "Bash", tool_input: { command: "echo a; echo b" } },
-  "ask");
+  "ask", TMP);
 test("ask: ampersand metacharacter",
   { tool_name: "Bash", tool_input: { command: "cmd1 && cmd2" } },
-  "ask");
+  "ask", TMP);
 
 // --- Allow ---
 test("allow: --help",
   { tool_name: "Bash", tool_input: { command: "jq --help" } },
-  "allow");
+  "allow", TMP);
 test("allow: git status",
   { tool_name: "Bash", tool_input: { command: "git status" } },
-  "allow");
+  "allow", TMP);
 test("allow: git log with args",
   { tool_name: "Bash", tool_input: { command: "git log --oneline" } },
-  "allow");
+  "allow", TMP);
 test("allow: aws describe",
   { tool_name: "Bash", tool_input: { command: "aws ec2 describe-instances" } },
-  "allow");
+  "allow", TMP);
 test("allow: aws list",
   { tool_name: "Bash", tool_input: { command: "aws s3 list-buckets" } },
-  "allow");
+  "allow", TMP);
 test("allow: Glob tool",
   { tool_name: "Glob", tool_input: { pattern: "**/*.ts" } },
-  "allow");
+  "allow", TMP);
 test("allow: Grep tool",
   { tool_name: "Grep", tool_input: { pattern: "TODO" } },
-  "allow");
+  "allow", TMP);
 test("allow: WebSearch tool",
   { tool_name: "WebSearch", tool_input: { query: "node docs" } },
-  "allow");
+  "allow", TMP);
 test("allow: WebFetch with flags (case-insensitive)",
   { tool_name: "WebFetch", tool_input: { url: "https://EXAMPLE.COM/page" } },
-  "allow");
+  "allow", TMP);
 
-// --- Flags isolation: tool name stays case-sensitive ---
-test("passthrough: tool name is case-sensitive even with flags",
+// --- Tool name anchoring ---
+test("passthrough: tool name is case-sensitive",
   { tool_name: "webfetch", tool_input: { url: "https://example.com" } },
-  "passthrough");
+  "passthrough", TMP);
+test("passthrough: NotebookEdit does not match Edit|Write",
+  { tool_name: "NotebookEdit", tool_input: { file_path: "/project/.env" } },
+  "passthrough", TMP);
+test("passthrough: BashExecutor does not match Bash",
+  { tool_name: "BashExecutor", tool_input: { command: "git push --force" } },
+  "passthrough", TMP);
 
 // --- Passthrough ---
 test("passthrough: unknown command",
   { tool_name: "Bash", tool_input: { command: "some-unknown-thing" } },
-  "passthrough");
+  "passthrough", TMP);
 test("passthrough: Read tool (no matching rule)",
   { tool_name: "Read", tool_input: { file_path: "/project/src/index.ts" } },
-  "passthrough");
+  "passthrough", TMP);
 
-// --- Tool name anchoring: prevent substring matches ---
-test("passthrough: NotebookEdit does not match Edit|Write rule",
-  { tool_name: "NotebookEdit", tool_input: { file_path: "/project/.env" } },
-  "passthrough");
-test("passthrough: BashExecutor does not match Bash rules",
-  { tool_name: "BashExecutor", tool_input: { command: "git push --force" } },
-  "passthrough");
-test("passthrough: MyGlob does not match Glob|Grep rule",
-  { tool_name: "MyGlob", tool_input: { pattern: "*.ts" } },
-  "passthrough");
-
-// --- Multiline command handling ---
-test("deny: multiline with sudo on line 2 is denied",
+// --- Multiline ---
+test("deny: multiline with sudo on line 2",
   { tool_name: "Bash", tool_input: { command: "git status\nsudo rm -rf /" } },
-  "deny");
-test("deny: multiline with denied command on line 3",
-  { tool_name: "Bash", tool_input: { command: "ls\necho hello\nsudo apt install" } },
-  "deny");
-test("ask: multiline triggers metacharacter ask via newline",
-  { tool_name: "Bash", tool_input: { command: "echo hello\necho world" } },
-  "ask");
+  "deny", TMP);
+test("ask: multiline with metacharacter on line 2",
+  { tool_name: "Bash", tool_input: { command: "echo hello\necho a | b" } },
+  "ask", TMP);
 
-// Check if global config has permissions (affects test isolation)
-const globalHasConfig = ((): boolean => {
-  const globalDir = path.join(os.homedir(), ".claude");
-  for (const file of ["settings.json", "settings.local.json"]) {
-    try {
-      const g = JSON.parse(fs.readFileSync(path.join(globalDir, file), "utf8"));
-      if (g.permissions) return true;
-    } catch { /* ignore */ }
-  }
-  return false;
-})();
+// --- Unknown tool fallback ---
+test("passthrough: unknown tool with command field",
+  { tool_name: "CustomTool", tool_input: { command: "git status" } },
+  "passthrough", TMP);
 
-// Test per-line allow logic with a config that doesn't have \n in ask
-const TMP_ML = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-ml-"));
-fs.mkdirSync(path.join(TMP_ML, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP_ML, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      deny: [{ rule: "Bash(^sudo)", reason: "No sudo" }],
-      allow: ["Bash(^git\\s+(status|log|diff))"],
-    },
-  })
-);
-{
-  const mlRun = (cmd: string): string => {
-    const r = run({ tool_name: "Bash", tool_input: { command: cmd }, cwd: TMP_ML });
-    return decision(r);
-  };
-  const tests: [string, string, string][] = [
-    ["deny: multiline per-line deny (no \\n ask)", "git status\nsudo rm -rf /", "deny"],
-    ["allow: multiline all lines allowed", "git status\ngit log", "allow"],
-  ];
-  for (const [name, cmd, expected] of tests) {
-    const got = mlRun(cmd);
-    if (got === expected) {
-      passed++;
-      console.log(`  pass  ${name}`);
-    } else {
-      failed++;
-      console.log(`  FAIL  ${name} — expected ${expected}, got ${got}`);
-    }
-  }
-  // Passthrough test: global config may add allow rules that match, so skip if present
-  {
-    const got = mlRun("git status\nsome-random-cmd");
-    if (globalHasConfig) {
-      skipped++;
-      console.log(`  skip  passthrough: multiline one line not covered (global config exists)`);
-    } else if (got === "passthrough") {
-      passed++;
-      console.log(`  pass  passthrough: multiline one line not covered`);
-    } else {
-      failed++;
-      console.log(`  FAIL  passthrough: multiline one line not covered — expected passthrough, got ${got}`);
-    }
-  }
-}
-fs.rmSync(TMP_ML, { recursive: true, force: true });
-
-// --- Error resilience ---
-// Use a temp dir with an empty settings file (no permissions key)
-const TMP2 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-empty-"));
-fs.mkdirSync(path.join(TMP2, ".claude"), { recursive: true });
-fs.writeFileSync(path.join(TMP2, ".claude", "settings.local.json"), "{}");
-{
-  const result = run({ tool_name: "Bash", tool_input: { command: "git push --force" }, cwd: TMP2 });
-  const got = decision(result);
-  if (globalHasConfig) {
-    skipped++;
-    console.log(`  skip  passthrough: no project config (global config exists)`);
-  } else if (got === "passthrough") {
-    passed++;
-    console.log(`  pass  passthrough: no project config`);
-  } else {
-    failed++;
-    console.log(`  FAIL  passthrough: no project config — expected passthrough, got ${got}`);
-  }
-}
-fs.rmSync(TMP2, { recursive: true, force: true });
-
-// --- Invalid regex is skipped (fail open) ---
-const TMP3 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-bad-"));
-fs.mkdirSync(path.join(TMP3, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP3, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      deny: [{ rule: "Bash(+)" }],
-    },
-  })
-);
-{
-  const result = run({ tool_name: "Bash", tool_input: { command: "anything" }, cwd: TMP3 });
-  const got = decision(result);
-  if (got === "passthrough") {
-    passed++;
-    console.log("  pass  passthrough: invalid content regex is skipped");
-  } else {
-    failed++;
-    console.log(`  FAIL  passthrough: invalid content regex — expected passthrough, got ${got}`);
-  }
-}
-fs.rmSync(TMP3, { recursive: true, force: true });
-
-// --- ReDoS protection ---
-const TMP4 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-redos-"));
-fs.mkdirSync(path.join(TMP4, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP4, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      deny: [{ rule: "Bash((a+)+$)" }],
-    },
-  })
-);
-{
-  const result = run({ tool_name: "Bash", tool_input: { command: "aaaaaaaaaaaa" }, cwd: TMP4 });
-  const got = decision(result);
-  if (got === "passthrough") {
-    passed++;
-    console.log("  pass  passthrough: ReDoS pattern is rejected");
-  } else {
-    failed++;
-    console.log(`  FAIL  passthrough: ReDoS pattern — expected passthrough, got ${got}`);
-  }
-}
-fs.rmSync(TMP4, { recursive: true, force: true });
-
-// --- Config validation: non-array deny ---
-const TMP5 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-badcfg-"));
-fs.mkdirSync(path.join(TMP5, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP5, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      deny: "not-an-array",
-      allow: [{ rule: "Bash(^ls)" }],
-    },
-  })
-);
-{
-  const result = run({ tool_name: "Bash", tool_input: { command: "ls -la" }, cwd: TMP5 });
-  const got = decision(result);
-  if (got === "allow") {
-    passed++;
-    console.log("  pass  allow: non-array deny is skipped, allow still works");
-  } else {
-    failed++;
-    console.log(`  FAIL  allow: non-array deny — expected allow, got ${got}`);
-  }
-}
-fs.rmSync(TMP5, { recursive: true, force: true });
-
-// --- g flag stripping ---
-const TMP6 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-gflag-"));
-fs.mkdirSync(path.join(TMP6, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP6, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      allow: [{ rule: "WebFetch(example\\.com)", flags: "gi" }],
-    },
-  })
-);
-{
-  // Call twice — with "g" flag, second call would fail due to lastIndex state.
-  // Since "g" is stripped, both calls should return allow.
-  const r1 = run({ tool_name: "WebFetch", tool_input: { url: "https://EXAMPLE.COM/1" }, cwd: TMP6 });
-  const r2 = run({ tool_name: "WebFetch", tool_input: { url: "https://EXAMPLE.COM/2" }, cwd: TMP6 });
-  const got1 = decision(r1);
-  const got2 = decision(r2);
-  if (got1 === "allow" && got2 === "allow") {
-    passed++;
-    console.log("  pass  allow: g flag stripped, case-insensitive still works");
-  } else {
-    failed++;
-    console.log(`  FAIL  allow: g flag — expected allow+allow, got ${got1}+${got2}`);
-  }
-}
-fs.rmSync(TMP6, { recursive: true, force: true });
-
-// --- Native wildcard entries are silently skipped ---
-const TMP7 = fs.mkdtempSync(path.join(os.tmpdir(), "regex-perm-wildcard-"));
-fs.mkdirSync(path.join(TMP7, ".claude"), { recursive: true });
-fs.writeFileSync(
-  path.join(TMP7, ".claude", "settings.local.json"),
-  JSON.stringify({
-    permissions: {
-      allow: [
-        "Bash(npm test:*)",     // native wildcard — not valid Tool(regex), skipped
-        "Bash(node:*)",         // native wildcard — skipped
-        "Bash(^git\\s+status)", // valid regex rule — should work
-      ],
-      deny: [
-        "Bash(rm -rf:*)",      // native wildcard — skipped
-      ],
-    },
-  })
-);
-{
-  // git status should be allowed by the valid regex rule
-  const r1 = run({ tool_name: "Bash", tool_input: { command: "git status" }, cwd: TMP7 });
-  const got1 = decision(r1);
-  if (got1 === "allow") {
-    passed++;
-    console.log("  pass  allow: valid regex rule works alongside native wildcards");
-  } else {
-    failed++;
-    console.log(`  FAIL  allow: valid regex rule alongside wildcards — expected allow, got ${got1}`);
-  }
-
-  // npm test should passthrough (native wildcard entry was skipped, no regex match)
-  const r2 = run({ tool_name: "Bash", tool_input: { command: "npm test" }, cwd: TMP7 });
-  const got2 = decision(r2);
-  if (got2 === "passthrough") {
-    passed++;
-    console.log("  pass  passthrough: native wildcard entry silently skipped");
-  } else {
-    failed++;
-    console.log(`  FAIL  passthrough: native wildcard — expected passthrough, got ${got2}`);
-  }
-
-  // rm -rf should passthrough (native wildcard deny was skipped)
-  const r3 = run({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/foo" }, cwd: TMP7 });
-  const got3 = decision(r3);
-  if (got3 === "passthrough") {
-    passed++;
-    console.log("  pass  passthrough: native wildcard deny entry silently skipped");
-  } else {
-    failed++;
-    console.log(`  FAIL  passthrough: native wildcard deny — expected passthrough, got ${got3}`);
-  }
-}
-fs.rmSync(TMP7, { recursive: true, force: true });
-
-const total = passed + failed + skipped;
-console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped (${total} total)\n`);
-
-// Cleanup
 fs.rmSync(TMP, { recursive: true, force: true });
 
+// --- Empty config → passthrough ---
+{
+  const tmp = makeTmpWithConfig({});
+  test("passthrough: no regexPermissions key",
+    { tool_name: "Bash", tool_input: { command: "git push --force" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- Invalid regex → fail open ---
+{
+  const tmp = makeTmpWithConfig({ regexPermissions: { deny: ["Bash(+)"] } });
+  test("passthrough: invalid regex is skipped",
+    { tool_name: "Bash", tool_input: { command: "anything" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- ReDoS protection ---
+{
+  const tmp = makeTmpWithConfig({ regexPermissions: { deny: ["Bash((a+)+$)"] } });
+  test("passthrough: ReDoS pattern is rejected",
+    { tool_name: "Bash", tool_input: { command: "aaaaaaaaaaaa" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- Non-array field → skip gracefully ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: { deny: "not-an-array", allow: ["Bash(^ls)"] },
+  });
+  test("allow: non-array deny is skipped, allow still works",
+    { tool_name: "Bash", tool_input: { command: "ls -la" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- Native rules in permissions key are ignored ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: { allow: ["Bash(npm test:*)"] },
+    regexPermissions: { allow: ["Bash(^git\\s+status)"] },
+  });
+  test("passthrough: native permissions key is ignored by plugin",
+    { tool_name: "Bash", tool_input: { command: "npm test" } },
+    "passthrough", tmp);
+  test("allow: regexPermissions key is used",
+    { tool_name: "Bash", tool_input: { command: "git status" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+const total = passed + failed;
+console.log(`\n${passed} passed, ${failed} failed (${total} total)\n`);
 process.exit(failed > 0 ? 1 : 0);
