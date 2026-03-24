@@ -10,6 +10,6 @@ export interface HookOutput {
 
 export interface HookInput {
   tool_name: string;
-  tool_input: Record<string, string>;
+  tool_input: Record<string, unknown>;
   cwd?: string;
 }

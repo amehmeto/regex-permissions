@@ -85,6 +85,8 @@ The content pattern matches against the tool's primary field:
 
 Deny always wins. A deny rule cannot be overridden by an ask or allow rule.
 
+For multiline commands, deny and ask rules check each line individually — `^sudo` will catch `sudo` embedded on any line. Allow rules match against the full command string only.
+
 ## Examples
 
 Allow any command's `--help` flag with a single rule:

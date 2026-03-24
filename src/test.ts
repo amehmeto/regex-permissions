@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -146,6 +144,19 @@ test("passthrough: unknown command",
   "passthrough", TMP);
 test("passthrough: Read tool (no matching rule)",
   { tool_name: "Read", tool_input: { file_path: "/project/src/index.ts" } },
+  "passthrough", TMP);
+
+// --- Multiline ---
+test("deny: multiline with sudo on line 2",
+  { tool_name: "Bash", tool_input: { command: "git status\nsudo rm -rf /" } },
+  "deny", TMP);
+test("ask: multiline with metacharacter on line 2",
+  { tool_name: "Bash", tool_input: { command: "echo hello\necho a | b" } },
+  "ask", TMP);
+
+// --- Unknown tool fallback ---
+test("passthrough: unknown tool with command field",
+  { tool_name: "CustomTool", tool_input: { command: "git status" } },
   "passthrough", TMP);
 
 fs.rmSync(TMP, { recursive: true, force: true });

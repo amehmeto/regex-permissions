@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -58,18 +56,22 @@ function toRegex(pattern: string, flags?: string): RegExp | null {
   }
 }
 
+function str(val: unknown): string | undefined {
+  return typeof val === "string" ? val : undefined;
+}
+
 function getPrimaryContent(
   toolName: string,
-  toolInput: Record<string, string> | undefined,
+  toolInput: Record<string, unknown> | undefined,
 ): string | undefined {
   if (!toolInput) return undefined;
-  if (toolName === "Bash") return toolInput.command;
+  if (toolName === "Bash") return str(toolInput.command);
   if (toolName === "Edit" || toolName === "Write" || toolName === "Read")
-    return toolInput.file_path;
-  if (toolName === "WebFetch") return toolInput.url;
-  if (toolName === "Grep" || toolName === "Glob") return toolInput.pattern;
-  if (toolName === "WebSearch") return toolInput.query;
-  return toolInput.command || toolInput.file_path || toolInput.url || toolInput.pattern;
+    return str(toolInput.file_path);
+  if (toolName === "WebFetch") return str(toolInput.url);
+  if (toolName === "Grep" || toolName === "Glob") return str(toolInput.pattern);
+  if (toolName === "WebSearch") return str(toolInput.query);
+  return str(toolInput.command) || str(toolInput.file_path) || str(toolInput.url) || str(toolInput.pattern);
 }
 
 // --- Rule parsing ---
@@ -142,20 +144,34 @@ function ruleMatches(
   return rule.contentRe.test(content);
 }
 
+function matchesAnyLine(
+  rule: ParsedRule,
+  toolName: string,
+  content: string | undefined,
+  lines: string[] | null,
+): boolean {
+  if (ruleMatches(rule, toolName, content)) return true;
+  if (!lines) return false;
+  return lines.some((line) => ruleMatches(rule, toolName, line));
+}
+
 function evaluate(
   rules: PreparedRules,
   toolName: string,
-  toolInput: Record<string, string>,
+  toolInput: Record<string, unknown>,
 ): { decision: "deny" | "ask" | "allow"; reason?: string } | null {
   const content = getPrimaryContent(toolName, toolInput);
+  const lines = content?.includes("\n")
+    ? content.split("\n").map((l) => l.trim()).filter(Boolean)
+    : null;
 
   for (const rule of rules.deny) {
-    if (ruleMatches(rule, toolName, content))
+    if (matchesAnyLine(rule, toolName, content, lines))
       return { decision: "deny", reason: rule.reason || "Blocked by regex-permissions deny rule" };
   }
 
   for (const rule of rules.ask) {
-    if (ruleMatches(rule, toolName, content))
+    if (matchesAnyLine(rule, toolName, content, lines))
       return { decision: "ask", reason: rule.reason || "Flagged by regex-permissions ask rule" };
   }
 
