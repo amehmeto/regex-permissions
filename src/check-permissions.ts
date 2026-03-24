@@ -19,7 +19,7 @@ interface ParsedRule {
   reason?: string;
 }
 
-interface PermissionsConfig {
+interface RegexPermissionsConfig {
   deny?: (string | RuleEntry)[];
   ask?: (string | RuleEntry)[];
   allow?: (string | RuleEntry)[];
@@ -31,62 +31,49 @@ interface PreparedRules {
   allow: ParsedRule[];
 }
 
-interface EvalResult {
-  decision: "deny" | "ask" | "allow";
-  reason?: string;
-}
-
 // --- Logging ---
 
 const DEBUG = process.env.REGEX_PERMISSIONS_DEBUG === "1";
-function warn(msg: string): void { process.stderr.write(`[regex-permissions] ${msg}\n`); }
-function debug(msg: string): void { if (DEBUG) warn(msg); }
+function debug(msg: string): void {
+  if (DEBUG) process.stderr.write(`[regex-permissions] ${msg}\n`);
+}
 
 // --- Helpers ---
 
-// ReDoS heuristic: reject groups containing a single quantified token followed by
-// a group quantifier. Catches (a+)+, (.+)*, (\d+)+, (\s*)+ etc. but allows
-// complex groups like (-H\s+\S+\s+)* that have structural anchoring.
+// ReDoS heuristic: reject (x+)+, (.+)*, (\d+)+ etc.
 function isSafeRegex(pattern: string): boolean {
   return !/\((\.|\\.|[^)\\])[+*]\)[+*{]/.test(pattern);
 }
 
-const regexCache = new Map<string, RegExp>();
-
 function toRegex(pattern: string, flags?: string): RegExp | null {
-  const key = `${flags || ""}:${pattern}`;
-  if (regexCache.has(key)) return regexCache.get(key)!;
   try {
     if (!isSafeRegex(pattern)) {
-      warn(`Skipping unsafe regex (possible ReDoS): ${pattern}`);
+      debug(`Skipping unsafe regex (possible ReDoS): ${pattern}`);
       return null;
     }
-    const re = new RegExp(pattern, flags || "");
-    regexCache.set(key, re);
-    return re;
+    return new RegExp(pattern, flags || "");
   } catch {
-    return null; // invalid regex — fail open
+    debug(`Skipping invalid regex: ${pattern}`);
+    return null;
   }
 }
 
-// Auto-detect the primary content field for each tool type
-function getPrimaryContent(toolName: string, toolInput: Record<string, string> | undefined): string | undefined {
+function getPrimaryContent(
+  toolName: string,
+  toolInput: Record<string, string> | undefined,
+): string | undefined {
   if (!toolInput) return undefined;
   if (toolName === "Bash") return toolInput.command;
   if (toolName === "Edit" || toolName === "Write" || toolName === "Read")
     return toolInput.file_path;
   if (toolName === "WebFetch") return toolInput.url;
-  if (toolName === "Grep") return toolInput.pattern;
-  if (toolName === "Glob") return toolInput.pattern;
+  if (toolName === "Grep" || toolName === "Glob") return toolInput.pattern;
   if (toolName === "WebSearch") return toolInput.query;
-  // MCP tools or unknown — try common fields
   return toolInput.command || toolInput.file_path || toolInput.url || toolInput.pattern;
 }
 
-// Parse a rule entry — supports both formats:
-//   String:  "Bash(^git\\s+push)"
-//   Object:  { "rule": "Bash(^git\\s+push)", "reason": "...", "flags": "i" }
-// Returns null for malformed entries.
+// --- Rule parsing ---
+
 function parseRule(entry: string | RuleEntry): ParsedRule | null {
   const raw = typeof entry === "string" ? entry : entry?.rule;
   if (!raw) return null;
@@ -94,27 +81,11 @@ function parseRule(entry: string | RuleEntry): ParsedRule | null {
   const match = raw.match(/^([^(]+)\((.+)\)$/s);
   if (!match) return null;
 
-  // Skip native wildcard entries like "Bash(npm test:*)" — the :* suffix
-  // is Claude Code's native wildcard syntax, not regex. Let the native
-  // permission system handle these.
-  if (match[2].endsWith(":*")) return null;
-
-  let flags = typeof entry === "object" ? entry.flags : undefined;
-
-  // Strip "g" flag — it causes stateful matching via lastIndex
-  if (flags && flags.includes("g")) {
-    warn(`Stripping "g" flag from rule (causes stateful matching): ${raw}`);
-    flags = flags.replace(/g/g, "") || undefined;
-  }
-
-  // Anchor tool regex to prevent substring matches (e.g. "Edit" matching "NotebookEdit")
+  const flags = typeof entry === "object" ? entry.flags : undefined;
   const toolRe = toRegex(`^(?:${match[1]})$`);
   const contentRe = toRegex(match[2], flags);
 
-  if (!toolRe || !contentRe) {
-    warn(`Skipping invalid rule: ${raw}`);
-    return null;
-  }
+  if (!toolRe || !contentRe) return null;
 
   return {
     toolRe,
@@ -125,18 +96,20 @@ function parseRule(entry: string | RuleEntry): ParsedRule | null {
 
 // --- Config loading ---
 
-function loadConfig(filePath: string): PermissionsConfig | null {
+function loadConfig(filePath: string): RegexPermissionsConfig | null {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    return parsed.permissions || null;
+    return JSON.parse(raw).regexPermissions || null;
   } catch {
-    return null; // missing or malformed — fail open
+    return null;
   }
 }
 
-function mergeConfigs(a: PermissionsConfig | null, b: PermissionsConfig | null): PermissionsConfig {
-  if (!a) return b || { deny: [], ask: [], allow: [] };
+function mergeConfigs(
+  a: RegexPermissionsConfig | null,
+  b: RegexPermissionsConfig | null,
+): RegexPermissionsConfig {
+  if (!a) return b || {};
   if (!b) return a;
   return {
     deny: (a.deny || []).concat(b.deny || []),
@@ -145,89 +118,52 @@ function mergeConfigs(a: PermissionsConfig | null, b: PermissionsConfig | null):
   };
 }
 
-// Pre-parse all rules once after config load
-function prepareRules(config: PermissionsConfig): PreparedRules {
-  const safeArray = (key: keyof PermissionsConfig): (string | RuleEntry)[] => {
+function prepareRules(config: RegexPermissionsConfig): PreparedRules {
+  const toArray = (key: keyof RegexPermissionsConfig) => {
     const val = config[key];
-    if (val == null) return [];
-    if (!Array.isArray(val)) {
-      warn(`"${key}" must be an array, got ${typeof val} — skipping`);
-      return [];
-    }
-    return val;
+    return Array.isArray(val) ? val : [];
   };
-  const parsed: PreparedRules = {
-    deny: safeArray("deny").map(parseRule).filter((r): r is ParsedRule => r !== null),
-    ask: safeArray("ask").map(parseRule).filter((r): r is ParsedRule => r !== null),
-    allow: safeArray("allow").map(parseRule).filter((r): r is ParsedRule => r !== null),
+  return {
+    deny: toArray("deny").map(parseRule).filter((r): r is ParsedRule => r !== null),
+    ask: toArray("ask").map(parseRule).filter((r): r is ParsedRule => r !== null),
+    allow: toArray("allow").map(parseRule).filter((r): r is ParsedRule => r !== null),
   };
-  debug(`Loaded ${parsed.deny.length} deny, ${parsed.ask.length} ask, ${parsed.allow.length} allow rules`);
-  return parsed;
 }
 
 // --- Evaluation ---
 
-function ruleMatches(parsed: ParsedRule, toolName: string, content: string | undefined): boolean {
-  if (!parsed.toolRe.test(toolName)) return false;
+function ruleMatches(
+  rule: ParsedRule,
+  toolName: string,
+  content: string | undefined,
+): boolean {
+  if (!rule.toolRe.test(toolName)) return false;
   if (content == null) return false;
-  return parsed.contentRe.test(content);
+  return rule.contentRe.test(content);
 }
 
-// For deny/ask: match if the full content or ANY individual line matches
-function matchesAnyLine(parsed: ParsedRule, toolName: string, content: string | undefined, lines: string[] | null): boolean {
-  if (ruleMatches(parsed, toolName, content)) return true;
-  if (lines) {
-    for (const line of lines) {
-      if (ruleMatches(parsed, toolName, line)) return true;
-    }
-  }
-  return false;
-}
-
-function evaluate(rules: PreparedRules, toolName: string, toolInput: Record<string, string>): EvalResult | null {
+function evaluate(
+  rules: PreparedRules,
+  toolName: string,
+  toolInput: Record<string, string>,
+): { decision: "deny" | "ask" | "allow"; reason?: string } | null {
   const content = getPrimaryContent(toolName, toolInput);
 
-  // Split multiline content for per-line checking
-  const lines = (content && content.includes("\n"))
-    ? content.split("\n").map(l => l.trim()).filter(Boolean)
-    : null;
-
-  // Deny first — any matching line triggers deny
-  for (const parsed of rules.deny) {
-    if (matchesAnyLine(parsed, toolName, content, lines)) {
-      return {
-        decision: "deny",
-        reason: parsed.reason || "Blocked by regex-permissions deny rule",
-      };
-    }
+  for (const rule of rules.deny) {
+    if (ruleMatches(rule, toolName, content))
+      return { decision: "deny", reason: rule.reason || "Blocked by regex-permissions deny rule" };
   }
 
-  // Then ask — any matching line triggers ask
-  for (const parsed of rules.ask) {
-    if (matchesAnyLine(parsed, toolName, content, lines)) {
-      return {
-        decision: "ask",
-        reason: parsed.reason || "Flagged by regex-permissions ask rule",
-      };
-    }
+  for (const rule of rules.ask) {
+    if (ruleMatches(rule, toolName, content))
+      return { decision: "ask", reason: rule.reason || "Flagged by regex-permissions ask rule" };
   }
 
-  // Then allow — for multiline, every non-empty line must match an allow rule
-  if (lines) {
-    for (const line of lines) {
-      const lineAllowed = rules.allow.some(p => ruleMatches(p, toolName, line));
-      if (!lineAllowed) return null; // passthrough — not all lines covered
-    }
-    return { decision: "allow" };
-  }
-
-  for (const parsed of rules.allow) {
-    if (ruleMatches(parsed, toolName, content)) {
+  for (const rule of rules.allow) {
+    if (ruleMatches(rule, toolName, content))
       return { decision: "allow" };
-    }
   }
 
-  // No match — passthrough to native permissions
   return null;
 }
 
@@ -244,41 +180,30 @@ async function main(): Promise<void> {
   }
 
   const { tool_name, tool_input, cwd } = input;
-  if (!tool_name) {
-    return;
-  }
+  if (!tool_name) return;
 
-  // Load project-level configs (settings.json + settings.local.json)
   const projectConfig = cwd
     ? mergeConfigs(
         loadConfig(path.join(cwd, ".claude", "settings.json")),
-        loadConfig(path.join(cwd, ".claude", "settings.local.json"))
+        loadConfig(path.join(cwd, ".claude", "settings.local.json")),
       )
     : null;
 
-  // Load global configs (settings.json + settings.local.json)
   const globalHome = path.join(os.homedir(), ".claude");
   const globalConfig = mergeConfigs(
     loadConfig(path.join(globalHome, "settings.json")),
-    loadConfig(path.join(globalHome, "settings.local.json"))
+    loadConfig(path.join(globalHome, "settings.local.json")),
   );
 
   const merged = mergeConfigs(projectConfig, globalConfig);
   const rules = prepareRules(merged);
 
-  if (
-    !rules.deny.length &&
-    !rules.ask.length &&
-    !rules.allow.length
-  ) {
-    return;
-  }
+  if (!rules.deny.length && !rules.ask.length && !rules.allow.length) return;
+
+  debug(`Loaded ${rules.deny.length} deny, ${rules.ask.length} ask, ${rules.allow.length} allow rules`);
 
   const result = evaluate(rules, tool_name, tool_input);
-
-  if (!result) {
-    return;
-  }
+  if (!result) return;
 
   const output: HookOutput = {
     hookSpecificOutput: {
