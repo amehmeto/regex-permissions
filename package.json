@@ -4,7 +4,6 @@
   "private": true,
   "description": "Regex-based permission rules for Claude Code",
   "author": "amehmeto",
-  "main": "dist/check-permissions.js",
   "engines": {
     "node": ">=18"
   },

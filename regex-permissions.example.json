@@ -1,12 +1,11 @@
 {
   "_comment": [
-    "Example permissions config — place inside your .claude/settings.local.json",
-    "Regex rules use the Tool(regex_pattern) format.",
-    "Native wildcard entries (e.g. Bash(npm test:*)) are silently skipped.",
+    "Example config — place inside your .claude/settings.local.json",
+    "Rules use the Tool(regex_pattern) format.",
     "Use object form { rule, reason, flags } when you need extras."
   ],
 
-  "permissions": {
+  "regexPermissions": {
     "deny": [
       { "rule": "Bash(^git\\s+(commit|push|merge|rebase)\\s+.*--no-verify)", "reason": "Never bypass git hooks" },
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push — use --force-with-lease" },
@@ -16,10 +15,8 @@
       { "rule": "Bash(^(sudo|chmod\\s+777|chown))", "reason": "No privilege escalation" }
     ],
 
-    "_note_on_overlap": "git push appears in both deny (--force) and ask (all pushes). Deny runs first, so --force is blocked; other pushes fall through to ask.",
-
     "ask": [
-      { "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" },
+      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" },
       { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing to remote" },
       { "rule": "Bash(^(npm|yarn|pnpm)\\s+(publish|unpublish))", "reason": "Publishing to registry requires approval" },
       { "rule": "Bash(^(docker|podman)\\s+(rm|rmi|system\\s+prune))", "reason": "Container cleanup requires approval" },

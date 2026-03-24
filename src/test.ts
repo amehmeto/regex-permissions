@@ -4,13 +4,7 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { HookOutput } from "./types";
-
-interface TestInput {
-  tool_name: string;
-  tool_input: Record<string, string>;
-  cwd?: string;
-}
+import { HookInput, HookOutput } from "./types";
 
 const SCRIPT = path.join(__dirname, "check-permissions.js");
 
@@ -24,7 +18,7 @@ function makeTmpWithConfig(config: object): string {
   return tmp;
 }
 
-function run(input: TestInput): HookOutput {
+function run(input: HookInput): HookOutput {
   const result = execFileSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
@@ -41,7 +35,7 @@ function decision(result: HookOutput): string {
 let passed = 0;
 let failed = 0;
 
-function test(name: string, input: Omit<TestInput, "cwd">, expected: string, cwd: string): void {
+function test(name: string, input: Omit<HookInput, "cwd">, expected: string, cwd: string): void {
   const got = decision(run({ ...input, cwd }));
   if (got === expected) {
     passed++;

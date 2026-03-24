@@ -10,28 +10,20 @@ Requires **Node.js >= 18**.
 claude --plugin-dir ~/regex-permissions
 ```
 
-Or add to your project's `.claude/plugins.json`:
-
-```json
-{
-  "plugins": ["~/regex-permissions"]
-}
-```
-
-Then add your rules to `.claude/settings.json` or `.claude/settings.local.json` (project-level), or `~/.claude/settings.json` or `~/.claude/settings.local.json` (global). See [Configuration](#configuration) below.
+Then add your rules to `.claude/settings.json` or `.claude/settings.local.json` (project-level), or `~/.claude/settings.json` or `~/.claude/settings.local.json` (global) under the `regexPermissions` key. See [Configuration](#configuration) below.
 
 ## Configuration
 
-Add your regex rules directly to the standard `permissions` key in your settings file. Both project-level and global configs are loaded and merged additively. All four files are read: `settings.json` and `settings.local.json` at both project and global levels.
+Add your regex rules under the `regexPermissions` key in your settings file. This key is separate from Claude Code's native `permissions` key — both can coexist without conflict. All four config files are loaded and merged additively.
 
 ```json
 {
-  "permissions": {
+  "regexPermissions": {
     "deny": [
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
     "ask": [
-      { "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" }
+      { "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }
     ],
     "allow": [
       "Bash(^\\S+\\s+--help$)",
@@ -42,9 +34,7 @@ Add your regex rules directly to the standard `permissions` key in your settings
 }
 ```
 
-**Coexistence with native permissions:** Native Claude Code wildcard entries (e.g. `Bash(npm test:*)`) use `:*` syntax that doesn't match the `Tool(regex)` format. These entries are silently skipped by regex-permissions and left for the native permission system to handle. This means you can have both regex rules and native wildcard rules in the same `permissions` block — regex-permissions evaluates what it understands, and everything else falls through to Claude Code's native system.
-
-See `regex-permissions.example.json` for a full annotated config with rules for git, GitHub CLI, AWS, Docker, package managers, and more.
+See `regex-permissions.example.json` for a full annotated config.
 
 ## Rule Syntax
 
@@ -65,7 +55,7 @@ Tool name regex ──┐    ┌── Content regex
 { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing", "flags": "i" }
 ```
 
-The `flags` field applies to the content regex only (tool names are always case-sensitive). The `g` flag is automatically stripped to prevent stateful matching bugs.
+The `flags` field applies to the content regex only (tool names are always case-sensitive).
 
 ## Tool Matching
 
@@ -84,7 +74,7 @@ The content pattern matches against the tool's primary field:
 | WebFetch   | `url`            |
 | Grep/Glob  | `pattern`        |
 | WebSearch  | `query`          |
-| MCP tools  | First of: `command`, `file_path`, `url`, `pattern` |
+| Other tools  | First of: `command`, `file_path`, `url`, `pattern` |
 
 ## Evaluation Order
 
@@ -95,15 +85,6 @@ The content pattern matches against the tool's primary field:
 
 Deny always wins. A deny rule cannot be overridden by an ask or allow rule.
 
-## Multiline Protection
-
-Commands containing newlines are evaluated per-line:
-
-- **Deny/Ask**: if *any* line matches a deny or ask rule, that decision applies to the whole command
-- **Allow**: *every* line must independently match an allow rule, otherwise the command falls through to native permissions
-
-This prevents bypass attacks like embedding `sudo rm -rf /` on line 2 of an otherwise-allowed command.
-
 ## Examples
 
 Allow any command's `--help` flag with a single rule:
@@ -111,9 +92,9 @@ Allow any command's `--help` flag with a single rule:
 "Bash(^\\S+\\s+--help$)"
 ```
 
-Prompt for approval when shell chaining, piping, or newlines are detected:
+Prompt for approval when shell metacharacters are detected:
 ```json
-{ "rule": "Bash([;|&`$#\\n])", "reason": "Shell metacharacters detected" }
+{ "rule": "Bash([;|&`$#])", "reason": "Shell metacharacters detected" }
 ```
 
 Allow all AWS read-only operations across every service:
@@ -140,7 +121,7 @@ Collapse many similar rules into one — **before** (native wildcards):
 **After** (regex):
 ```json
 {
-  "permissions": {
+  "regexPermissions": {
     "allow": [
       "Bash(^git\\s+(status|log|diff|show|branch|tag))",
       "Bash(^gh\\s+(pr|issue)\\s+(view|list|status))"
@@ -153,24 +134,22 @@ Collapse many similar rules into one — **before** (native wildcards):
 
 The plugin **fails open** — if anything goes wrong, native permissions take over:
 
-- Missing `permissions` key → passthrough
+- Missing config → passthrough
 - Invalid JSON → passthrough
-- Invalid regex → that rule is skipped (warning on stderr)
-- Unsafe regex (ReDoS) → that rule is skipped (warning on stderr)
-- Non-array config value → skipped (warning on stderr)
+- Invalid regex → that rule is skipped
+- Unsafe regex (ReDoS) → that rule is skipped
+- Non-array config value → skipped
 - Script crash → 5-second timeout, passthrough
 
 ## Debugging
 
-Set the environment variable to see which rules are loaded:
+Set the environment variable to see rule loading and skipped rules:
 
 ```bash
-REGEX_PERMISSIONS_DEBUG=1 claude --plugin-dir ~/regex-permissions
+REGEX_PERMISSIONS_DEBUG=1 claude
 ```
 
-Warnings (invalid rules, unsafe regexes, bad config) are always printed to stderr regardless of debug mode.
-
-You can also test rules directly without Claude Code:
+Test rules directly without Claude Code:
 
 ```bash
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"."}' \
@@ -191,4 +170,4 @@ git\s+push     also matches "digit push"
 
 **Word boundaries** to prevent partial matches: `^npm\\s+test\\b`
 
-**Avoid nested quantifiers** (ReDoS risk) — patterns like `(a+)+` are automatically rejected. Prefer `\\S+` over `.*` where possible.
+**Avoid nested quantifiers** (ReDoS risk) — patterns like `(a+)+` are automatically rejected.
