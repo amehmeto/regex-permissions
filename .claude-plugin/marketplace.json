@@ -1,0 +1,12 @@
+{
+  "name": "amehmeto-regex-permissions",
+  "owner": {
+    "name": "amehmeto"
+  },
+  "plugins": [
+    {
+      "name": "regex-permissions",
+      "source": "."
+    }
+  ]
+}

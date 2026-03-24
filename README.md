@@ -2,15 +2,23 @@
 
 A Claude Code plugin that lets you write permission rules using regex instead of wildcards.
 
-Requires **Node.js >= 18**.
-
 ## Installation
 
-```bash
-claude --plugin-dir ~/regex-permissions
+**Install permanently** — inside Claude Code, run:
+
+```
+/plugin marketplace add amehmeto/regex-permissions
+/plugin install regex-permissions@amehmeto-regex-permissions
 ```
 
-Then add your rules to `.claude/settings.json` or `.claude/settings.local.json` (project-level), or `~/.claude/settings.json` or `~/.claude/settings.local.json` (global) under the `regexPermissions` key. See [Configuration](#configuration) below.
+**Or try it for a single session:**
+
+```bash
+git clone https://github.com/amehmeto/regex-permissions.git
+claude --plugin-dir ./regex-permissions
+```
+
+Then add your rules under the `regexPermissions` key in `.claude/settings.json` or `.claude/settings.local.json` (project or global). See [Configuration](#configuration) below.
 
 ## Configuration
 

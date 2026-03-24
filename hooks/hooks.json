@@ -1,5 +1,4 @@
 {
-  "description": "Regex-based permission rules for Claude Code tools",
   "hooks": {
     "PreToolUse": [
       {
