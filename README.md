@@ -2,8 +2,6 @@
 
 A Claude Code plugin that lets you write permission rules using regex instead of wildcards.
 
-Requires **Node.js >= 18**.
-
 ## Installation
 
 **Install permanently** — inside Claude Code, run:
