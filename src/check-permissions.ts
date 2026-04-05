@@ -19,6 +19,7 @@ interface ParsedRule {
 
 interface RegexPermissionsConfig {
   requireReason?: boolean;
+  guardNativePermissions?: boolean;
   deny?: (string | RuleEntry)[];
   ask?: (string | RuleEntry)[];
   allow?: (string | RuleEntry)[];
@@ -116,6 +117,7 @@ function mergeConfigs(
   if (!b) return a;
   return {
     requireReason: a.requireReason || b.requireReason,
+    guardNativePermissions: a.guardNativePermissions || b.guardNativePermissions,
     deny: (a.deny || []).concat(b.deny || []),
     ask: (a.ask || []).concat(b.ask || []),
     allow: (a.allow || []).concat(b.allow || []),
@@ -195,6 +197,91 @@ function evaluate(
   return null;
 }
 
+// --- Native permissions guard ---
+
+const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\(.+\)$/;
+
+function suggestRegex(native: string): string {
+  const m = native.match(/^([\w|]+)\((.+)\)$/);
+  if (!m) return native;
+  const [, tool, rawPattern] = m;
+
+  // Handle WebFetch domain: prefix → URL regex
+  const domainMatch = rawPattern.match(/^domain:(.+)$/);
+  if (domainMatch) {
+    const domain = domainMatch[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    return `${tool}(^https?://${domain}(/|$))`;
+  }
+
+  let core = rawPattern.replace(/[:*]+$/, "").trimEnd();
+  const segments = core.split(/\*+/);
+  core = segments
+    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  core = core.replace(/(\.\*)+/g, ".*");
+  core = core.replace(/ +/g, "\\s+");
+
+  const isBash = /\bBash\b/.test(tool);
+  const needsBoundary = isBash && /\w$/.test(core);
+  return needsBoundary ? `${tool}(^${core}\\b)` : `${tool}(^${core})`;
+}
+
+function guardNativePermissions(filePath: string): void {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return;
+  }
+
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  const perms = json.permissions as Record<string, unknown> | undefined;
+  if (!perms) return;
+
+  const allowEntries = perms.allow;
+  if (!Array.isArray(allowEntries)) return;
+
+  let changed = false;
+  const removed: Array<{ entry: string; suggestion: string }> = [];
+  const kept: unknown[] = [];
+
+  for (const entry of allowEntries) {
+    const rule = typeof entry === "string" ? entry : (entry as Record<string, unknown>)?.rule;
+    if (typeof rule === "string" && MANAGED_TOOL_RE.test(rule)) {
+      removed.push({ entry: rule, suggestion: suggestRegex(rule) });
+      changed = true;
+    } else {
+      kept.push(entry);
+    }
+  }
+
+  if (!changed) return;
+
+  if (kept.length > 0) {
+    perms.allow = kept;
+  } else {
+    delete perms.allow;
+  }
+  if (Object.keys(perms).length === 0) {
+    delete json.permissions;
+  }
+
+  fs.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
+
+  for (const { entry, suggestion } of removed) {
+    process.stderr.write(
+      `[regex-permissions] Removed native allow: ${entry}\n` +
+      `  → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`,
+    );
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -224,6 +311,11 @@ async function main(): Promise<void> {
   );
 
   const merged = mergeConfigs(projectConfig, globalConfig);
+
+  if (merged.guardNativePermissions && cwd) {
+    guardNativePermissions(path.join(cwd, ".claude", "settings.local.json"));
+  }
+
   const rules = prepareRules(merged);
 
   if (!rules.deny.length && !rules.ask.length && !rules.allow.length) return;

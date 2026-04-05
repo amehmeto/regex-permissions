@@ -106,6 +106,27 @@ This is opt-in — when `requireReason` is not set or `false`, string rules and 
 
 If any of the four config files sets `requireReason: true`, it applies to all merged rules.
 
+## Guarding Native Permissions
+
+When Claude Code's "don't ask again" prompt is accepted, it writes a native wildcard rule to `settings.local.json`. Enable `guardNativePermissions` to automatically revert these entries and suggest the regex equivalent:
+
+```json
+{
+  "regexPermissions": {
+    "guardNativePermissions": true
+  }
+}
+```
+
+On each hook invocation, the guard removes `permissions.allow` entries for tools that regex-permissions manages (Bash, Edit, Write, Read, WebFetch, Grep, Glob, WebSearch) and prints the suggested regex to stderr:
+
+```
+[regex-permissions] Removed native allow: Bash(git fetch:*)
+  → Add to regexPermissions.allow: { "rule": "Bash(^git\\s+fetch\\b)", "reason": "..." }
+```
+
+Only `allow` entries with patterns are removed — the guard does not touch `deny` or `ask` entries (which are intentional safety rules, not auto-added). Bare tool names like `"Edit"` and non-managed entries (Skill, MCP, BashOutput) are always kept. The guard only modifies `settings.local.json`, never the committed `settings.json` or global config.
+
 ## Evaluation Order
 
 1. **Deny** — first matching deny rule blocks the action
