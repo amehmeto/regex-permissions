@@ -118,14 +118,14 @@ When Claude Code's "don't ask again" prompt is accepted, it writes a native wild
 }
 ```
 
-On each hook invocation, the guard removes native `permissions` entries for tools that regex-permissions manages (Bash, Edit, Write, Read, WebFetch, Grep, Glob, WebSearch) and prints the suggested regex to stderr:
+On each hook invocation, the guard removes `permissions.allow` entries for tools that regex-permissions manages (Bash, Edit, Write, Read, WebFetch, Grep, Glob, WebSearch) and prints the suggested regex to stderr:
 
 ```
 [regex-permissions] Removed native allow: Bash(git fetch:*)
   → Add to regexPermissions.allow: { "rule": "Bash(^git\\s+fetch\\b)", "reason": "..." }
 ```
 
-Only entries with patterns are removed — bare tool names like `"Edit"` and non-managed entries (Skill, MCP, BashOutput) are always kept. The guard only modifies project-level config files, never global ones.
+Only `allow` entries with patterns are removed — the guard does not touch `deny` or `ask` entries (which are intentional safety rules, not auto-added). Bare tool names like `"Edit"` and non-managed entries (Skill, MCP, BashOutput) are always kept. The guard only modifies `settings.local.json`, never the committed `settings.json` or global config.
 
 ## Evaluation Order
 

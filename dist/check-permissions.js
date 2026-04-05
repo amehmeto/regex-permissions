@@ -181,38 +181,37 @@ function guardNativePermissions(filePath) {
     const perms = json.permissions;
     if (!perms)
         return;
+    const allowEntries = perms.allow;
+    if (!Array.isArray(allowEntries))
+        return;
     let changed = false;
     const removed = [];
-    for (const level of ["allow", "deny", "ask"]) {
-        const entries = perms[level];
-        if (!Array.isArray(entries))
-            continue;
-        const kept = [];
-        for (const entry of entries) {
-            if (typeof entry === "string" && MANAGED_TOOL_RE.test(entry)) {
-                removed.push({ level, entry, suggestion: suggestRegex(entry) });
-                changed = true;
-            }
-            else {
-                kept.push(entry);
-            }
+    const kept = [];
+    for (const entry of allowEntries) {
+        const rule = typeof entry === "string" ? entry : entry?.rule;
+        if (typeof rule === "string" && MANAGED_TOOL_RE.test(rule)) {
+            removed.push({ entry: rule, suggestion: suggestRegex(rule) });
+            changed = true;
         }
-        perms[level] = kept;
+        else {
+            kept.push(entry);
+        }
     }
     if (!changed)
         return;
-    for (const level of ["allow", "deny", "ask"]) {
-        if (Array.isArray(perms[level]) && perms[level].length === 0) {
-            delete perms[level];
-        }
+    if (kept.length > 0) {
+        perms.allow = kept;
+    }
+    else {
+        delete perms.allow;
     }
     if (Object.keys(perms).length === 0) {
         delete json.permissions;
     }
     fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
-    for (const { level, entry, suggestion } of removed) {
-        process.stderr.write(`[regex-permissions] Removed native ${level}: ${entry}\n` +
-            `  → Add to regexPermissions.${level}: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
+    for (const { entry, suggestion } of removed) {
+        process.stderr.write(`[regex-permissions] Removed native allow: ${entry}\n` +
+            `  → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
     }
 }
 // --- Main ---
@@ -237,7 +236,6 @@ async function main() {
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
     if (merged.guardNativePermissions && cwd) {
-        guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.json"));
         guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"));
     }
     const rules = prepareRules(merged);
