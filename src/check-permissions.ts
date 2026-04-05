@@ -18,6 +18,7 @@ interface ParsedRule {
 }
 
 interface RegexPermissionsConfig {
+  requireReason?: boolean;
   deny?: (string | RuleEntry)[];
   ask?: (string | RuleEntry)[];
   allow?: (string | RuleEntry)[];
@@ -71,7 +72,7 @@ function getPrimaryContent(
   if (toolName === "WebFetch") return str(toolInput.url);
   if (toolName === "Grep" || toolName === "Glob") return str(toolInput.pattern);
   if (toolName === "WebSearch") return str(toolInput.query);
-  return str(toolInput.command) || str(toolInput.file_path) || str(toolInput.url) || str(toolInput.pattern);
+  return str(toolInput.command) || str(toolInput.file_path) || str(toolInput.url) || str(toolInput.pattern) || str(toolInput.query);
 }
 
 // --- Rule parsing ---
@@ -114,6 +115,7 @@ function mergeConfigs(
   if (!a) return b || {};
   if (!b) return a;
   return {
+    requireReason: a.requireReason || b.requireReason,
     deny: (a.deny || []).concat(b.deny || []),
     ask: (a.ask || []).concat(b.ask || []),
     allow: (a.allow || []).concat(b.allow || []),
@@ -121,14 +123,24 @@ function mergeConfigs(
 }
 
 function prepareRules(config: RegexPermissionsConfig): PreparedRules {
-  const toArray = (key: keyof RegexPermissionsConfig) => {
+  const requireReason = config.requireReason === true;
+  const toArray = (key: "deny" | "ask" | "allow") => {
     const val = config[key];
     return Array.isArray(val) ? val : [];
   };
+  const parse = (entries: (string | RuleEntry)[]) =>
+    entries.map(parseRule).filter((r): r is ParsedRule => {
+      if (r === null) return false;
+      if (requireReason && !r.reason) {
+        debug(`Skipping rule without reason (requireReason is enabled): ${r.toolRe.source} / ${r.contentRe.source}`);
+        return false;
+      }
+      return true;
+    });
   return {
-    deny: toArray("deny").map(parseRule).filter((r): r is ParsedRule => r !== null),
-    ask: toArray("ask").map(parseRule).filter((r): r is ParsedRule => r !== null),
-    allow: toArray("allow").map(parseRule).filter((r): r is ParsedRule => r !== null),
+    deny: parse(toArray("deny")),
+    ask: parse(toArray("ask")),
+    allow: parse(toArray("allow")),
   };
 }
 
