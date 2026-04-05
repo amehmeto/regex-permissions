@@ -159,6 +159,11 @@ test("passthrough: unknown tool with command field",
   { tool_name: "CustomTool", tool_input: { command: "git status" } },
   "passthrough", TMP);
 
+// --- Multiline trimming ---
+test("deny: multiline with indented sudo (trimmed)",
+  { tool_name: "Bash", tool_input: { command: "echo hello\n  sudo rm -rf /" } },
+  "deny", TMP);
+
 fs.rmSync(TMP, { recursive: true, force: true });
 
 // --- Empty config → passthrough ---
@@ -199,6 +204,20 @@ fs.rmSync(TMP, { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// --- Unknown tool with query fallback ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: { allow: ["CustomSearch(node docs)"] },
+  });
+  test("allow: unknown tool falls back to query field",
+    { tool_name: "CustomSearch", tool_input: { query: "node docs" } },
+    "allow", tmp);
+  test("passthrough: unknown tool with no matching fallback field",
+    { tool_name: "CustomSearch", tool_input: { other: "node docs" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 // --- Native rules in permissions key are ignored ---
 {
   const tmp = makeTmpWithConfig({
@@ -210,6 +229,49 @@ fs.rmSync(TMP, { recursive: true, force: true });
     "passthrough", tmp);
   test("allow: regexPermissions key is used",
     { tool_name: "Bash", tool_input: { command: "git status" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- requireReason: rules without reason are skipped ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      requireReason: true,
+      deny: [
+        { rule: "Bash(^sudo)", reason: "No sudo" },
+        "Bash(^rm)",
+      ],
+      allow: [
+        "Bash(^git\\s+status)",
+        { rule: "Bash(^echo)", reason: "Allow echo" },
+      ],
+    },
+  });
+  test("deny: rule with reason is kept when requireReason is enabled",
+    { tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } },
+    "deny", tmp);
+  test("passthrough: deny string rule (no reason) is skipped when requireReason is enabled",
+    { tool_name: "Bash", tool_input: { command: "rm file.txt" } },
+    "passthrough", tmp);
+  test("passthrough: allow string rule (no reason) is skipped when requireReason is enabled",
+    { tool_name: "Bash", tool_input: { command: "git status" } },
+    "passthrough", tmp);
+  test("allow: allow object rule with reason is kept when requireReason is enabled",
+    { tool_name: "Bash", tool_input: { command: "echo hello" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- requireReason: false (default) keeps all rules ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      allow: ["Bash(^ls)"],
+    },
+  });
+  test("allow: string rule works when requireReason is not set",
+    { tool_name: "Bash", tool_input: { command: "ls -la" } },
     "allow", tmp);
   fs.rmSync(tmp, { recursive: true, force: true });
 }

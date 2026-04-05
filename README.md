@@ -67,7 +67,7 @@ The `flags` field applies to the content regex only (tool names are always case-
 
 ## Tool Matching
 
-The tool name portion is an **exact match** — `Bash` matches only `Bash`, not `BashExecutor` or `MyBash`. Use alternation for multiple tools:
+The tool name portion is an **anchored regex** — it must match the full tool name (`^(?:...)$`). `Bash` matches only `Bash`, not `BashExecutor` or `MyBash`. Use alternation for multiple tools:
 
 ```json
 "Edit|Write|Read(\\.(ts|js|py)$)"
@@ -82,7 +82,29 @@ The content pattern matches against the tool's primary field:
 | WebFetch   | `url`            |
 | Grep/Glob  | `pattern`        |
 | WebSearch  | `query`          |
-| Other tools  | First of: `command`, `file_path`, `url`, `pattern` |
+| Other tools  | First of: `command`, `file_path`, `url`, `pattern`, `query` |
+
+## Requiring Reasons
+
+Enable `requireReason` to enforce that every rule includes a `reason` field. Rules without one (including all string-form rules) are silently skipped, falling through to native permissions.
+
+```json
+{
+  "regexPermissions": {
+    "requireReason": true,
+    "deny": [
+      { "rule": "Bash(^sudo)", "reason": "No sudo" }
+    ],
+    "allow": [
+      { "rule": "Bash(^git\\s+status)", "reason": "Read-only git" }
+    ]
+  }
+}
+```
+
+This is opt-in — when `requireReason` is not set or `false`, string rules and object rules without `reason` work normally. Skipped rules are visible with `REGEX_PERMISSIONS_DEBUG=1`.
+
+If any of the four config files sets `requireReason: true`, it applies to all merged rules.
 
 ## Evaluation Order
 
@@ -93,7 +115,7 @@ The content pattern matches against the tool's primary field:
 
 Deny always wins. A deny rule cannot be overridden by an ask or allow rule.
 
-For multiline commands, deny and ask rules check each line individually — `^sudo` will catch `sudo` embedded on any line. Allow rules match against the full command string only.
+For multiline commands, deny and ask rules check each line individually — `^sudo` will catch `sudo` embedded on any line. Each line is trimmed and empty lines are skipped, so `^sudo` also catches indented lines like `  sudo`. Allow rules match against the full command string only.
 
 ## Examples
 
