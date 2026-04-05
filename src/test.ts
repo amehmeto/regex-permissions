@@ -276,6 +276,105 @@ fs.rmSync(TMP, { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// --- guardNativePermissions ---
+{
+  // Removes managed tool entries, keeps Skill/MCP/bare entries
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: [
+        "Bash(git fetch:*)",
+        "Bash(npm run lint:*)",
+        "Edit",
+        "Read",
+        "Write",
+        "Skill(commit-push)",
+        "mcp__github__get_me",
+      ],
+      deny: [
+        "Bash(git push --force:*)",
+        "BashOutput(*)",
+        "mcp__github__merge_pull_request",
+      ],
+    },
+    regexPermissions: {
+      guardNativePermissions: true,
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+
+  // Trigger the hook so the guard runs
+  run({ tool_name: "Bash", tool_input: { command: "git status" }, cwd: tmp });
+
+  // Read the file back and check what was kept/removed
+  const after = JSON.parse(
+    fs.readFileSync(path.join(tmp, ".claude", "settings.local.json"), "utf8"),
+  );
+  const allowKept = after.permissions?.allow || [];
+  const denyKept = after.permissions?.deny || [];
+
+  function assert(condition: boolean, name: string): void {
+    if (condition) {
+      passed++;
+      console.log(`  pass  ${name}`);
+    } else {
+      failed++;
+      console.log(`  FAIL  ${name}`);
+    }
+  }
+
+  // Managed tool entries with patterns should be removed
+  assert(!allowKept.includes("Bash(git fetch:*)"), "guard: Bash(git fetch:*) removed from allow");
+  assert(!allowKept.includes("Bash(npm run lint:*)"), "guard: Bash(npm run lint:*) removed from allow");
+  assert(!denyKept.includes("Bash(git push --force:*)"), "guard: Bash(git push --force:*) removed from deny");
+
+  // Bare tool names (no parens) should be kept
+  assert(allowKept.includes("Edit"), "guard: bare Edit kept");
+  assert(allowKept.includes("Read"), "guard: bare Read kept");
+  assert(allowKept.includes("Write"), "guard: bare Write kept");
+
+  // Skill/MCP entries should be kept
+  assert(allowKept.includes("Skill(commit-push)"), "guard: Skill entry kept");
+  assert(allowKept.includes("mcp__github__get_me"), "guard: MCP allow entry kept");
+  assert(denyKept.includes("BashOutput(*)"), "guard: BashOutput deny kept");
+  assert(denyKept.includes("mcp__github__merge_pull_request"), "guard: MCP deny entry kept");
+
+  // regexPermissions should be untouched
+  assert(!!after.regexPermissions, "guard: regexPermissions preserved");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- guardNativePermissions: disabled by default ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: { allow: ["Bash(git fetch:*)"] },
+    regexPermissions: { allow: ["Bash(^git\\s+status)"] },
+  });
+
+  run({ tool_name: "Bash", tool_input: { command: "git status" }, cwd: tmp });
+
+  const after = JSON.parse(
+    fs.readFileSync(path.join(tmp, ".claude", "settings.local.json"), "utf8"),
+  );
+
+  function assert2(condition: boolean, name: string): void {
+    if (condition) {
+      passed++;
+      console.log(`  pass  ${name}`);
+    } else {
+      failed++;
+      console.log(`  FAIL  ${name}`);
+    }
+  }
+
+  assert2(
+    after.permissions?.allow?.includes("Bash(git fetch:*)"),
+    "guard: native entries kept when guardNativePermissions is not set",
+  );
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 const total = passed + failed;
 console.log(`\n${passed} passed, ${failed} failed (${total} total)\n`);
 process.exit(failed > 0 ? 1 : 0);

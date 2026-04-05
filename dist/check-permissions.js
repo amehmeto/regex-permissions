@@ -84,6 +84,7 @@ function mergeConfigs(a, b) {
         return a;
     return {
         requireReason: a.requireReason || b.requireReason,
+        guardNativePermissions: a.guardNativePermissions || b.guardNativePermissions,
         deny: (a.deny || []).concat(b.deny || []),
         ask: (a.ask || []).concat(b.ask || []),
         allow: (a.allow || []).concat(b.allow || []),
@@ -144,6 +145,76 @@ function evaluate(rules, toolName, toolInput) {
     }
     return null;
 }
+// --- Native permissions guard ---
+const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\(.+\)$/;
+function suggestRegex(native) {
+    const m = native.match(/^([\w|]+)\((.+)\)$/);
+    if (!m)
+        return native;
+    const [, tool, rawPattern] = m;
+    let core = rawPattern.replace(/[:*]+$/, "").trimEnd();
+    const segments = core.split(/\*+/);
+    core = segments
+        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join(".*");
+    core = core.replace(/(\.\*)+/g, ".*");
+    core = core.replace(/ +/g, "\\s+");
+    const isBash = /\bBash\b/.test(tool);
+    const needsBoundary = isBash && /\w$/.test(core);
+    return needsBoundary ? `${tool}(^${core}\\b)` : `${tool}(^${core})`;
+}
+function guardNativePermissions(filePath) {
+    let raw;
+    try {
+        raw = fs_1.default.readFileSync(filePath, "utf8");
+    }
+    catch {
+        return;
+    }
+    let json;
+    try {
+        json = JSON.parse(raw);
+    }
+    catch {
+        return;
+    }
+    const perms = json.permissions;
+    if (!perms)
+        return;
+    let changed = false;
+    const removed = [];
+    for (const level of ["allow", "deny", "ask"]) {
+        const entries = perms[level];
+        if (!Array.isArray(entries))
+            continue;
+        const kept = [];
+        for (const entry of entries) {
+            if (typeof entry === "string" && MANAGED_TOOL_RE.test(entry)) {
+                removed.push({ level, entry, suggestion: suggestRegex(entry) });
+                changed = true;
+            }
+            else {
+                kept.push(entry);
+            }
+        }
+        perms[level] = kept;
+    }
+    if (!changed)
+        return;
+    for (const level of ["allow", "deny", "ask"]) {
+        if (Array.isArray(perms[level]) && perms[level].length === 0) {
+            delete perms[level];
+        }
+    }
+    if (Object.keys(perms).length === 0) {
+        delete json.permissions;
+    }
+    fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
+    for (const { level, entry, suggestion } of removed) {
+        process.stderr.write(`[regex-permissions] Removed native ${level}: ${entry}\n` +
+            `  → Add to regexPermissions.${level}: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
+    }
+}
 // --- Main ---
 async function main() {
     let input;
@@ -165,6 +236,10 @@ async function main() {
     const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
+    if (merged.guardNativePermissions && cwd) {
+        guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.json"));
+        guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"));
+    }
     const rules = prepareRules(merged);
     if (!rules.deny.length && !rules.ask.length && !rules.allow.length)
         return;
