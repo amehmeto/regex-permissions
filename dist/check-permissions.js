@@ -152,6 +152,12 @@ function suggestRegex(native) {
     if (!m)
         return native;
     const [, tool, rawPattern] = m;
+    // Handle WebFetch domain: prefix → URL regex
+    const domainMatch = rawPattern.match(/^domain:(.+)$/);
+    if (domainMatch) {
+        const domain = domainMatch[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+        return `${tool}(^https?://${domain}(/|$))`;
+    }
     let core = rawPattern.replace(/[:*]+$/, "").trimEnd();
     const segments = core.split(/\*+/);
     core = segments

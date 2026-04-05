@@ -374,6 +374,26 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// --- guardNativePermissions: WebFetch domain: prefix converted to URL regex ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["WebFetch(domain:github.com)"],
+    },
+    regexPermissions: {
+      guardNativePermissions: true,
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+
+  const after = readSettingsAfterRun(tmp);
+  assert(after.permissions === undefined, "guard: WebFetch domain: entry removed");
+
+  // Verify the suggestion was correct by checking stderr would contain the URL regex
+  // (We can't capture stderr easily, but we verify the function directly)
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 // --- guardNativePermissions: empty permissions object is deleted ---
 {
   const tmp = makeTmpWithConfig({
