@@ -130,12 +130,14 @@ function readJsonFile(filePath: string): Record<string, unknown> | null {
 
 function loadConfig(filePath: string): RegexPermissionsConfig | null {
   const json = readJsonFile(filePath);
-  return (json?.regexPermissions as RegexPermissionsConfig) || null;
+  const config = (json?.regexPermissions as RegexPermissionsConfig) || null;
+  if (config) validateConfig(config, filePath);
+  return config;
 }
 
 const KNOWN_CONFIG_KEYS = new Set(["requireReason", "guardNativePermissions", "deny", "ask", "allow"]);
 
-function validateConfig(config: RegexPermissionsConfig): void {
+function validateConfig(config: RegexPermissionsConfig, filePath: string): void {
   for (const key of Object.keys(config)) {
     if (!KNOWN_CONFIG_KEYS.has(key)) {
       let suggestion = "";
@@ -145,7 +147,7 @@ function validateConfig(config: RegexPermissionsConfig): void {
           break;
         }
       }
-      process.stderr.write(`[regex-permissions] Unknown config key: "${key}"${suggestion}\n`);
+      process.stderr.write(`[regex-permissions] Unknown config key "${key}" in ${filePath}${suggestion}\n`);
     }
   }
 }
@@ -376,8 +378,6 @@ async function main(): Promise<void> {
   );
 
   const merged = mergeConfigs(projectConfig, globalConfig);
-
-  validateConfig(merged);
 
   if (merged.guardNativePermissions && cwd) {
     const autoAdd = merged.guardNativePermissions === "auto";

@@ -551,6 +551,51 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// --- Tool-name-only with requireReason skips string rules ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      requireReason: true,
+      allow: [
+        "mcp__github__list_pulls",
+        { rule: "mcp__github__get_me", reason: "Allow get_me" },
+      ],
+    },
+  });
+  test("passthrough: tool-name-only string skipped when requireReason is enabled",
+    { tool_name: "mcp__github__list_pulls", tool_input: { owner: "foo" } },
+    "passthrough", tmp);
+  test("allow: tool-name-only object with reason kept when requireReason is enabled",
+    { tool_name: "mcp__github__get_me", tool_input: {} },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- guardNativePermissions: auto merge precedence ---
+{
+  // "auto" in one config + true in another → "auto" wins
+  const tmp = makeTmpWithConfig({
+    permissions: { allow: ["Bash(git fetch:*)"] },
+    regexPermissions: { guardNativePermissions: "auto", allow: ["Bash(^git\\s+status)"] },
+  });
+  // Write a second config with guardNativePermissions: true
+  fs.writeFileSync(
+    path.join(tmp, ".claude", "settings.json"),
+    JSON.stringify({ regexPermissions: { guardNativePermissions: true } }),
+  );
+
+  const after = readSettingsAfterRun(tmp);
+
+  // "auto" should win — native entry removed AND regex added
+  const rpAllow = (after.regexPermissions as Record<string, unknown>)?.allow as unknown[] || [];
+  assert(
+    rpAllow.some((e: unknown) => typeof e === "object" && (e as Record<string, unknown>)?.rule === "Bash(^git\\s+fetch\\b)"),
+    "guard-auto-merge: auto wins over true, regex rule auto-added",
+  );
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 const total = passed + failed;
 console.log(`\n${passed} passed, ${failed} failed (${total} total)\n`);
 process.exit(failed > 0 ? 1 : 0);

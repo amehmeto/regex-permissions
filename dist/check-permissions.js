@@ -96,10 +96,13 @@ function readJsonFile(filePath) {
 }
 function loadConfig(filePath) {
     const json = readJsonFile(filePath);
-    return json?.regexPermissions || null;
+    const config = json?.regexPermissions || null;
+    if (config)
+        validateConfig(config, filePath);
+    return config;
 }
 const KNOWN_CONFIG_KEYS = new Set(["requireReason", "guardNativePermissions", "deny", "ask", "allow"]);
-function validateConfig(config) {
+function validateConfig(config, filePath) {
     for (const key of Object.keys(config)) {
         if (!KNOWN_CONFIG_KEYS.has(key)) {
             let suggestion = "";
@@ -109,7 +112,7 @@ function validateConfig(config) {
                     break;
                 }
             }
-            process.stderr.write(`[regex-permissions] Unknown config key: "${key}"${suggestion}\n`);
+            process.stderr.write(`[regex-permissions] Unknown config key "${key}" in ${filePath}${suggestion}\n`);
         }
     }
 }
@@ -299,7 +302,6 @@ async function main() {
     const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
-    validateConfig(merged);
     if (merged.guardNativePermissions && cwd) {
         const autoAdd = merged.guardNativePermissions === "auto";
         const added = guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"), autoAdd);
