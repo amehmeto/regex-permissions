@@ -453,6 +453,104 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// --- Tool-name-only rules (no parentheses) ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      deny: [
+        { rule: "mcp__github__merge_pull_request", reason: "No merge via MCP" },
+      ],
+      allow: [
+        "mcp__github__list_pulls",
+        "Bash(^git\\s+status)",
+      ],
+    },
+  });
+  test("deny: tool-name-only rule matches MCP tool",
+    { tool_name: "mcp__github__merge_pull_request", tool_input: { owner: "foo", repo: "bar", pull_number: 1 } },
+    "deny", tmp);
+  test("allow: tool-name-only rule matches MCP tool",
+    { tool_name: "mcp__github__list_pulls", tool_input: { owner: "foo", repo: "bar" } },
+    "allow", tmp);
+  test("passthrough: tool-name-only rule does not match other tools",
+    { tool_name: "mcp__github__create_pull", tool_input: { owner: "foo" } },
+    "passthrough", tmp);
+  test("allow: regular parenthesized rule still works alongside tool-name-only",
+    { tool_name: "Bash", tool_input: { command: "git status" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- Tool-name-only with regex alternation ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      allow: ["Glob|Grep|WebSearch"],
+    },
+  });
+  test("allow: tool-name-only with alternation matches Glob",
+    { tool_name: "Glob", tool_input: { pattern: "**/*.ts" } },
+    "allow", tmp);
+  test("allow: tool-name-only with alternation matches WebSearch",
+    { tool_name: "WebSearch", tool_input: { query: "test" } },
+    "allow", tmp);
+  test("passthrough: tool-name-only with alternation does not match Bash",
+    { tool_name: "Bash", tool_input: { command: "ls" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- guardNativePermissions: auto mode ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["Bash(git fetch:*)", "Bash(npm run lint:*)"],
+    },
+    regexPermissions: {
+      guardNativePermissions: "auto",
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+
+  const after = readSettingsAfterRun(tmp);
+
+  // Native entries should be removed
+  assert(after.permissions === undefined, "guard-auto: native permissions removed");
+
+  // Regex rules should be auto-added to regexPermissions
+  const rpAllow = (after.regexPermissions as Record<string, unknown>)?.allow as unknown[];
+  assert(
+    rpAllow.some((e: unknown) => typeof e === "object" && (e as Record<string, unknown>)?.rule === "Bash(^git\\s+fetch\\b)"),
+    "guard-auto: Bash(git fetch:*) converted and added to regexPermissions",
+  );
+  assert(
+    rpAllow.some((e: unknown) => typeof e === "object" && (e as Record<string, unknown>)?.rule === "Bash(^npm\\s+run\\s+lint\\b)"),
+    "guard-auto: Bash(npm run lint:*) converted and added to regexPermissions",
+  );
+
+  // Auto-added rules should work immediately (in-memory merge)
+  test("guard-auto: auto-added rule takes effect immediately",
+    { tool_name: "Bash", tool_input: { command: "git fetch origin" } },
+    "allow", tmp);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- Config validation: unknown key warning ---
+// (We can't easily capture stderr in tests, but we verify it doesn't crash)
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      requierReason: true,
+      allow: ["Bash(^ls)"],
+    },
+  });
+  test("allow: unknown config key does not crash, rules still work",
+    { tool_name: "Bash", tool_input: { command: "ls -la" } },
+    "allow", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 const total = passed + failed;
 console.log(`\n${passed} passed, ${failed} failed (${total} total)\n`);
 process.exit(failed > 0 ? 1 : 0);
