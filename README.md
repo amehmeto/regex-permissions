@@ -63,6 +63,19 @@ Tool name regex ──┐    ┌── Content regex
 { "rule": "Bash(^git\\s+push)", "reason": "Confirm before pushing", "flags": "i" }
 ```
 
+**Tool-name-only form** — omit parentheses to match any content. Useful for MCP and Skill tools where the plugin cannot inspect input fields:
+```json
+{
+  "deny": [
+    { "rule": "mcp__github__merge_pull_request", "reason": "No merge via MCP" }
+  ],
+  "allow": [
+    "mcp__github__list_pulls",
+    "Glob|Grep|WebSearch"
+  ]
+}
+```
+
 The `flags` field applies to the content regex only (tool names are always case-sensitive).
 
 ## Tool Matching
@@ -110,20 +123,24 @@ If any of the four config files sets `requireReason: true`, it applies to all me
 
 When Claude Code's "don't ask again" prompt is accepted, it writes a native wildcard rule to `settings.local.json`. Enable `guardNativePermissions` to automatically revert these entries and suggest the regex equivalent:
 
+**Suggest mode** — removes the native entry and prints the suggested regex:
 ```json
-{
-  "regexPermissions": {
-    "guardNativePermissions": true
-  }
-}
+{ "guardNativePermissions": true }
 ```
-
-On each hook invocation, the guard removes `permissions.allow` entries for tools that regex-permissions manages (Bash, Edit, Write, Read, WebFetch, Grep, Glob, WebSearch) and prints the suggested regex to stderr:
-
 ```
 [regex-permissions] Removed native allow: Bash(git fetch:*)
   → Add to regexPermissions.allow: { "rule": "Bash(^git\\s+fetch\\b)", "reason": "..." }
 ```
+
+**Auto mode** — removes the native entry AND adds the converted regex to `regexPermissions.allow` automatically:
+```json
+{ "guardNativePermissions": "auto" }
+```
+```
+[regex-permissions] Converted native allow: Bash(git fetch:*) → { "rule": "Bash(^git\\s+fetch\\b)" }
+```
+
+Auto-added rules take effect immediately on the same tool call.
 
 Only `allow` entries with patterns are removed — the guard does not touch `deny` or `ask` entries (which are intentional safety rules, not auto-added). Bare tool names like `"Edit"` and non-managed entries (Skill, MCP, BashOutput) are always kept. The guard only modifies `settings.local.json`, never the committed `settings.json` or global config.
 
@@ -192,21 +209,35 @@ The plugin **fails open** — if anything goes wrong, native permissions take ov
 - Invalid regex → that rule is skipped
 - Unsafe regex (ReDoS) → that rule is skipped
 - Non-array config value → skipped
+- Unknown config key → warning to stderr, rules still work
 - Script crash → 5-second timeout, passthrough
 
 ## Debugging
 
-Set the environment variable to see rule loading and skipped rules:
+Set the environment variable to see which rule matched each decision:
 
 ```bash
 REGEX_PERMISSIONS_DEBUG=1 claude
+```
+
+Example debug output:
+```
+[regex-permissions] Loaded 3 deny, 2 ask, 5 allow rules
+[regex-permissions] DENY Bash "git push --force" → Bash(^git\s+push\s+.*--force) (No force push)
+[regex-permissions] ALLOW Bash "git status" → Bash(^git\s+(status|log|diff))
+[regex-permissions] PASS Bash "some-unknown-cmd" → no match
+```
+
+Debug also warns about unknown config keys (possible typos):
+```
+[regex-permissions] Unknown config key: "requierReason" (did you mean "requireReason"?)
 ```
 
 Test rules directly without Claude Code:
 
 ```bash
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"."}' \
-  | node dist/check-permissions.js
+  | REGEX_PERMISSIONS_DEBUG=1 node dist/check-permissions.js
 ```
 
 ## Regex Tips

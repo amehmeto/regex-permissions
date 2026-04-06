@@ -54,8 +54,18 @@ function parseRule(entry) {
     if (!raw)
         return null;
     const match = raw.match(/^([^(]+)\((.+)\)$/s);
-    if (!match)
-        return null;
+    if (!match) {
+        // Tool-name-only rule (no parentheses) — matches any content
+        const toolRe = toRegex(`^(?:${raw})$`);
+        if (!toolRe)
+            return null;
+        return {
+            toolRe,
+            contentRe: null,
+            reason: typeof entry === "object" ? entry.reason : undefined,
+            source: raw,
+        };
+    }
     const flags = typeof entry === "object" ? entry.flags : undefined;
     const toolRe = toRegex(`^(?:${match[1]})$`);
     const contentRe = toRegex(match[2], flags);
@@ -65,16 +75,45 @@ function parseRule(entry) {
         toolRe,
         contentRe,
         reason: typeof entry === "object" ? entry.reason : undefined,
+        source: raw,
     };
 }
 // --- Config loading ---
-function loadConfig(filePath) {
+const jsonCache = new Map();
+function readJsonFile(filePath) {
+    if (jsonCache.has(filePath))
+        return jsonCache.get(filePath);
     try {
         const raw = fs_1.default.readFileSync(filePath, "utf8");
-        return JSON.parse(raw).regexPermissions || null;
+        const json = JSON.parse(raw);
+        jsonCache.set(filePath, json);
+        return json;
     }
     catch {
+        jsonCache.set(filePath, null);
         return null;
+    }
+}
+function loadConfig(filePath) {
+    const json = readJsonFile(filePath);
+    const config = json?.regexPermissions || null;
+    if (config)
+        validateConfig(config, filePath);
+    return config;
+}
+const KNOWN_CONFIG_KEYS = new Set(["requireReason", "guardNativePermissions", "deny", "ask", "allow"]);
+function validateConfig(config, filePath) {
+    for (const key of Object.keys(config)) {
+        if (!KNOWN_CONFIG_KEYS.has(key)) {
+            let suggestion = "";
+            for (const known of KNOWN_CONFIG_KEYS) {
+                if (known.toLowerCase().startsWith(key.toLowerCase().slice(0, 4))) {
+                    suggestion = ` (did you mean "${known}"?)`;
+                    break;
+                }
+            }
+            process.stderr.write(`[regex-permissions] Unknown config key "${key}" in ${filePath}${suggestion}\n`);
+        }
     }
 }
 function mergeConfigs(a, b) {
@@ -84,7 +123,9 @@ function mergeConfigs(a, b) {
         return a;
     return {
         requireReason: a.requireReason || b.requireReason,
-        guardNativePermissions: a.guardNativePermissions || b.guardNativePermissions,
+        guardNativePermissions: a.guardNativePermissions === "auto" || b.guardNativePermissions === "auto"
+            ? "auto"
+            : a.guardNativePermissions || b.guardNativePermissions,
         deny: (a.deny || []).concat(b.deny || []),
         ask: (a.ask || []).concat(b.ask || []),
         allow: (a.allow || []).concat(b.allow || []),
@@ -100,7 +141,7 @@ function prepareRules(config) {
         if (r === null)
             return false;
         if (requireReason && !r.reason) {
-            debug(`Skipping rule without reason (requireReason is enabled): ${r.toolRe.source} / ${r.contentRe.source}`);
+            debug(`Skipping rule without reason (requireReason is enabled): ${r.source}`);
             return false;
         }
         return true;
@@ -115,6 +156,8 @@ function prepareRules(config) {
 function ruleMatches(rule, toolName, content) {
     if (!rule.toolRe.test(toolName))
         return false;
+    if (rule.contentRe === null)
+        return true; // tool-name-only: match any content
     if (content == null)
         return false;
     return rule.contentRe.test(content);
@@ -128,21 +171,29 @@ function matchesAnyLine(rule, toolName, content, lines) {
 }
 function evaluate(rules, toolName, toolInput) {
     const content = getPrimaryContent(toolName, toolInput);
+    const contentPreview = content ? JSON.stringify(content.length > 80 ? content.slice(0, 80) + "…" : content) : "(no content)";
     const lines = content?.includes("\n")
         ? content.split("\n").map((l) => l.trim()).filter(Boolean)
         : null;
     for (const rule of rules.deny) {
-        if (matchesAnyLine(rule, toolName, content, lines))
+        if (matchesAnyLine(rule, toolName, content, lines)) {
+            debug(`DENY ${toolName} ${contentPreview} → ${rule.source}${rule.reason ? ` (${rule.reason})` : ""}`);
             return { decision: "deny", reason: rule.reason || "Blocked by regex-permissions deny rule" };
+        }
     }
     for (const rule of rules.ask) {
-        if (matchesAnyLine(rule, toolName, content, lines))
+        if (matchesAnyLine(rule, toolName, content, lines)) {
+            debug(`ASK ${toolName} ${contentPreview} → ${rule.source}${rule.reason ? ` (${rule.reason})` : ""}`);
             return { decision: "ask", reason: rule.reason || "Flagged by regex-permissions ask rule" };
+        }
     }
     for (const rule of rules.allow) {
-        if (ruleMatches(rule, toolName, content))
+        if (ruleMatches(rule, toolName, content)) {
+            debug(`ALLOW ${toolName} ${contentPreview} → ${rule.source}`);
             return { decision: "allow" };
+        }
     }
+    debug(`PASS ${toolName} ${contentPreview} → no match`);
     return null;
 }
 // --- Native permissions guard ---
@@ -169,27 +220,16 @@ function suggestRegex(native) {
     const needsBoundary = isBash && /\w$/.test(core);
     return needsBoundary ? `${tool}(^${core}\\b)` : `${tool}(^${core})`;
 }
-function guardNativePermissions(filePath) {
-    let raw;
-    try {
-        raw = fs_1.default.readFileSync(filePath, "utf8");
-    }
-    catch {
-        return;
-    }
-    let json;
-    try {
-        json = JSON.parse(raw);
-    }
-    catch {
-        return;
-    }
+function guardNativePermissions(filePath, autoAdd) {
+    const json = readJsonFile(filePath);
+    if (!json)
+        return [];
     const perms = json.permissions;
     if (!perms)
-        return;
+        return [];
     const allowEntries = perms.allow;
     if (!Array.isArray(allowEntries))
-        return;
+        return [];
     let changed = false;
     const removed = [];
     const kept = [];
@@ -204,7 +244,7 @@ function guardNativePermissions(filePath) {
         }
     }
     if (!changed)
-        return;
+        return [];
     if (kept.length > 0) {
         perms.allow = kept;
     }
@@ -214,11 +254,32 @@ function guardNativePermissions(filePath) {
     if (Object.keys(perms).length === 0) {
         delete json.permissions;
     }
+    const addedRules = [];
+    if (autoAdd) {
+        if (!json.regexPermissions)
+            json.regexPermissions = {};
+        const rp = json.regexPermissions;
+        if (!rp.allow)
+            rp.allow = [];
+        for (const { suggestion } of removed) {
+            const ruleEntry = { rule: suggestion, reason: "Auto-converted from native permissions" };
+            addedRules.push(ruleEntry);
+            rp.allow.push(ruleEntry);
+        }
+    }
+    // Invalidate cache before writing
+    jsonCache.delete(filePath);
     fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
     for (const { entry, suggestion } of removed) {
-        process.stderr.write(`[regex-permissions] Removed native allow: ${entry}\n` +
-            `  → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
+        if (autoAdd) {
+            process.stderr.write(`[regex-permissions] Converted native allow: ${entry} → { "rule": ${JSON.stringify(suggestion)} }\n`);
+        }
+        else {
+            process.stderr.write(`[regex-permissions] Removed native allow: ${entry}\n` +
+                `  → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
+        }
     }
+    return addedRules;
 }
 // --- Main ---
 async function main() {
@@ -242,7 +303,11 @@ async function main() {
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
     if (merged.guardNativePermissions && cwd) {
-        guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"));
+        const autoAdd = merged.guardNativePermissions === "auto";
+        const added = guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"), autoAdd);
+        if (added.length > 0) {
+            merged.allow = (merged.allow || []).concat(added);
+        }
     }
     const rules = prepareRules(merged);
     if (!rules.deny.length && !rules.ask.length && !rules.allow.length)
