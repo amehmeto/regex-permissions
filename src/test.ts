@@ -806,7 +806,7 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// --- PostToolUse: disabled when guardNativePermissions is not set ---
+// --- PostToolUse: disabled when neither suggestOnPassthrough nor guardNativePermissions is set ---
 {
   const tmp = makeTmpWithConfig({
     permissions: {
@@ -821,7 +821,36 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
   const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
   const nativeAllow = (after.permissions?.allow || []) as string[];
-  assert(nativeAllow.includes("Bash(cowsay:*)"), "post: native rule kept when guardNativePermissions is not set");
+  assert(nativeAllow.includes("Bash(cowsay:*)"), "post: native rule kept when no suggest/guard enabled");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- PostToolUse: triggered by suggestOnPassthrough alone (no guardNativePermissions) ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["Edit", "Bash(cowsay:*)"],
+    },
+    regexPermissions: {
+      suggestOnPassthrough: true,
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+  const settingsPath = path.join(tmp, ".claude", "settings.local.json");
+
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+
+  const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const nativeAllow = (after.permissions?.allow || []) as string[];
+  const regexAllow = (after.regexPermissions?.allow || []) as (string | { rule: string })[];
+
+  assert(!nativeAllow.includes("Bash(cowsay:*)"), "post-suggest: native Bash(cowsay:*) removed");
+  assert(nativeAllow.includes("Edit"), "post-suggest: bare Edit kept");
+  assert(
+    regexAllow.some((r) => typeof r === "object" && r.rule === "Bash(^cowsay\\b)"),
+    "post-suggest: regex added via suggestOnPassthrough alone",
+  );
 
   fs.rmSync(tmp, { recursive: true, force: true });
 }

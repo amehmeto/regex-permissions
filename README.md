@@ -20,6 +20,12 @@ claude --plugin-dir ./regex-permissions
 
 Then add your rules under the `regexPermissions` key in `.claude/settings.json` or `.claude/settings.local.json` (project or global). See [Configuration](#configuration) below.
 
+## Updating the Plugin
+
+- **`--plugin-dir`** loads directly from the source directory — no cache, changes apply on restart
+- **Marketplace installed** (`@local-plugins`) uses a cache in `~/.claude/plugins/cache/` — run `/reload-plugins` inside Claude Code to pick up updates without restarting
+- If `/reload-plugins` doesn't pick up changes, clear the cache manually: `rm -rf ~/.claude/plugins/cache/local-plugins/regex-permissions` and restart
+
 ## Configuration
 
 Add your regex rules under the `regexPermissions` key in your settings file. This key is separate from Claude Code's native `permissions` key — both can coexist without conflict. All four config files are loaded and merged additively.
@@ -27,6 +33,8 @@ Add your regex rules under the `regexPermissions` key in your settings file. Thi
 ```json
 {
   "regexPermissions": {
+    "suggestOnPassthrough": true,
+    "guardNativePermissions": "auto",
     "deny": [
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
@@ -119,28 +127,51 @@ This is opt-in — when `requireReason` is not set or `false`, string rules and 
 
 If any of the four config files sets `requireReason: true`, it applies to all merged rules.
 
+## Suggesting Rules on Passthrough
+
+Enable `suggestOnPassthrough` to get regex suggestions whenever a tool use doesn't match any rule. Instead of silently passing through to native permissions, the plugin returns `ask` with a suggested regex to add:
+
+```json
+{
+  "regexPermissions": {
+    "suggestOnPassthrough": true,
+    "allow": ["Bash(^git\\s+status)"]
+  }
+}
+```
+
+When you run `docker compose up` (no matching rule), the approval prompt includes:
+```
+No matching regex rule. Suggested: "Bash(^docker\s+compose\b)"
+```
+
+Suggestions are context-aware:
+- **Bash**: extracts the command and subcommand, skips wrappers (`sudo`, `env`, `nohup`, `time`) and env var assignments (`FOO=bar`)
+- **Edit/Write/Read**: suggests a file extension pattern like `Edit(\.tsx$)`
+- **WebFetch**: suggests a domain-based pattern like `WebFetch(^https?://docs\.github\.com(/|$))`
+- **MCP/unknown tools**: suggests a tool-name-only rule
+
 ## Guarding Native Permissions
 
-When Claude Code's "don't ask again" prompt is accepted, it writes a native wildcard rule to `settings.local.json`. Enable `guardNativePermissions` to automatically revert these entries and suggest the regex equivalent:
+When Claude Code's "don't ask again" prompt is accepted, it writes a native wildcard rule (e.g. `Bash(cowsay:*)`) to `permissions.allow` in `settings.local.json`. Enable `guardNativePermissions` to intercept these and convert them to regex:
 
-**Suggest mode** — removes the native entry and prints the suggested regex:
+**Suggest mode** — removes the native entry and logs the suggested regex:
 ```json
 { "guardNativePermissions": true }
 ```
-```
-[regex-permissions] Removed native allow: Bash(git fetch:*)
-  → Add to regexPermissions.allow: { "rule": "Bash(^git\\s+fetch\\b)", "reason": "..." }
-```
 
-**Auto mode** — removes the native entry AND adds the converted regex to `regexPermissions.allow` automatically:
+**Auto mode** (recommended) — removes the native entry AND adds the converted regex to `regexPermissions.allow` automatically:
 ```json
 { "guardNativePermissions": "auto" }
 ```
-```
-[regex-permissions] Converted native allow: Bash(git fetch:*) → { "rule": "Bash(^git\\s+fetch\\b)" }
-```
 
-Auto-added rules take effect immediately on the same tool call.
+With auto mode, the full flow is seamless:
+
+1. You run an unknown command → plugin suggests a regex and prompts for approval
+2. You approve → Claude Code adds a native rule to `permissions.allow`
+3. **Immediately** on the same tool use, the PostToolUse hook detects the native rule, removes it, and adds the regex equivalent to `regexPermissions.allow`
+
+No manual migration needed — approved rules land in the right place automatically.
 
 Only `allow` entries with patterns are removed — the guard does not touch `deny` or `ask` entries (which are intentional safety rules, not auto-added). Bare tool names like `"Edit"` and non-managed entries (Skill, MCP, BashOutput) are always kept. The guard only modifies `settings.local.json`, never the committed `settings.json` or global config.
 
@@ -225,7 +256,9 @@ Example debug output:
 [regex-permissions] Loaded 3 deny, 2 ask, 5 allow rules
 [regex-permissions] DENY Bash "git push --force" → Bash(^git\s+push\s+.*--force) (No force push)
 [regex-permissions] ALLOW Bash "git status" → Bash(^git\s+(status|log|diff))
+[regex-permissions] SUGGEST Bash → Bash(^docker\s+compose\b)
 [regex-permissions] PASS Bash "some-unknown-cmd" → no match
+[regex-permissions] PostToolUse: converted Bash(cowsay:*) → Bash(^cowsay\b)
 ```
 
 Debug also warns about unknown config keys (possible typos):

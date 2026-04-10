@@ -498,7 +498,9 @@ function handlePostToolUse(toolName: string, toolInput: Record<string, unknown>,
     loadConfig(path.join(globalHome, "settings.local.json")),
   );
   const merged = mergeConfigs(projectConfig, globalConfig);
-  if (!merged.guardNativePermissions) return;
+
+  // Convert just-approved native rule when suggestOnPassthrough or guardNativePermissions is enabled
+  if (!merged.suggestOnPassthrough && !merged.guardNativePermissions) return;
 
   // Always write to project settings.local.json
   const settingsPath = path.join(cwd, ".claude", "settings.local.json");
