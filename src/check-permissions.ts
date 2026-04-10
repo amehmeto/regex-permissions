@@ -221,9 +221,8 @@ function matchesAnyLine(
 function evaluate(
   rules: PreparedRules,
   toolName: string,
-  toolInput: Record<string, unknown>,
+  content: string | undefined,
 ): { decision: "deny" | "ask" | "allow"; reason?: string } | null {
-  const content = getPrimaryContent(toolName, toolInput);
   const contentPreview = content ? JSON.stringify(content.length > 80 ? content.slice(0, 80) + "…" : content) : "(no content)";
   const lines = content?.includes("\n")
     ? content.split("\n").map((l) => l.trim()).filter(Boolean)
@@ -256,6 +255,8 @@ function evaluate(
 
 // --- Regex suggestion ---
 
+const BASH_WRAPPERS = /^(env|nohup|time|nice|ionice|timeout|sudo)$/;
+
 function escapeRegex(s: string): string {
   return s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -268,10 +269,20 @@ function generateRegexSuggestion(toolName: string, content: string | undefined):
     const tokens = firstLine.split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return `Bash(.*)`;
 
-    if (tokens.length >= 2 && /^[a-zA-Z]/.test(tokens[1])) {
-      return `Bash(^${escapeRegex(tokens[0])}\\s+${escapeRegex(tokens[1])}\\b)`;
+    // Skip wrapper commands (env, nohup, time, sudo, etc.) and env var assignments (FOO=bar)
+    let cmdIdx = 0;
+    while (cmdIdx < tokens.length - 1 && (BASH_WRAPPERS.test(tokens[cmdIdx]) || /^\w+=/.test(tokens[cmdIdx]))) {
+      cmdIdx++;
     }
-    return `Bash(^${escapeRegex(tokens[0])}\\b)`;
+
+    const cmd = tokens[cmdIdx];
+    const subcmd = tokens[cmdIdx + 1];
+
+    // Include subcommand if it looks like one (starts with letter, not a path, not a filename, not an assignment)
+    if (subcmd && /^[a-zA-Z]/.test(subcmd) && !/[/.=]/.test(subcmd)) {
+      return `Bash(^${escapeRegex(cmd)}\\s+${escapeRegex(subcmd)}\\b)`;
+    }
+    return `Bash(^${escapeRegex(cmd)}\\b)`;
   }
 
   if (toolName === "Edit" || toolName === "Write" || toolName === "Read") {
@@ -442,11 +453,11 @@ async function main(): Promise<void> {
 
   debug(`Loaded ${rules.deny.length} deny, ${rules.ask.length} ask, ${rules.allow.length} allow rules`);
 
-  const result = evaluate(rules, tool_name, tool_input);
+  const content = getPrimaryContent(tool_name, tool_input);
+  const result = evaluate(rules, tool_name, content);
 
   if (!result) {
     if (merged.suggestOnPassthrough) {
-      const content = getPrimaryContent(tool_name, tool_input);
       const suggestion = generateRegexSuggestion(tool_name, content);
       debug(`SUGGEST ${tool_name} → ${suggestion}`);
       const output: HookOutput = {
