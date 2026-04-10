@@ -385,6 +385,33 @@ function guardApprovedRule(filePath, toolName, content) {
     fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
     debug(`PostToolUse: converted ${matchRule} → ${suggestion}`);
 }
+// Write a suggested regex rule directly to regexPermissions.allow
+function persistSuggestion(filePath, toolName, content) {
+    let json;
+    try {
+        json = JSON.parse(fs_1.default.readFileSync(filePath, "utf8"));
+    }
+    catch {
+        json = {};
+    }
+    const suggestion = generateRegexSuggestion(toolName, content);
+    if (!json.regexPermissions)
+        json.regexPermissions = {};
+    const rp = json.regexPermissions;
+    if (!rp.allow)
+        rp.allow = [];
+    // Don't add duplicates
+    const existing = rp.allow;
+    const alreadyExists = existing.some((e) => {
+        const r = typeof e === "string" ? e : e.rule;
+        return r === suggestion;
+    });
+    if (alreadyExists)
+        return;
+    existing.push({ rule: suggestion, reason: "Auto-added from approved suggestion" });
+    fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
+    debug(`PostToolUse: persisted suggestion ${suggestion}`);
+}
 // --- Main ---
 const mode = process.argv[2] || "pre";
 async function main() {
@@ -409,18 +436,27 @@ async function main() {
     return handlePreToolUse(tool_name, tool_input, cwd);
 }
 function handlePostToolUse(toolName, toolInput, cwd) {
-    // Check merged config for guardNativePermissions (same sources as PreToolUse)
     const projectConfig = mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")));
     const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
-    // Convert just-approved native rule when suggestOnPassthrough or guardNativePermissions is enabled
     if (!merged.suggestOnPassthrough && !merged.guardNativePermissions)
         return;
-    // Always write to project settings.local.json
     const settingsPath = path_1.default.join(cwd, ".claude", "settings.local.json");
-    const content = getPrimaryContent(toolName, toolInput);
-    guardApprovedRule(settingsPath, toolName, content);
+    // Guard: convert native rules added by Claude Code
+    if (merged.guardNativePermissions) {
+        const content = getPrimaryContent(toolName, toolInput);
+        guardApprovedRule(settingsPath, toolName, content);
+    }
+    // Suggest: if this tool use had no matching regex rule, persist the suggestion
+    if (merged.suggestOnPassthrough) {
+        const rules = prepareRules(merged);
+        const content = getPrimaryContent(toolName, toolInput);
+        const result = evaluate(rules, toolName, content);
+        if (result === null) {
+            persistSuggestion(settingsPath, toolName, content);
+        }
+    }
 }
 function handlePreToolUse(toolName, toolInput, cwd) {
     const projectConfig = cwd
