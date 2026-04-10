@@ -1,3 +1,4 @@
 node_modules/
 dist/test.js
 .claude/settings.local.json
+firebase-debug.log

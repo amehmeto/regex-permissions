@@ -806,7 +806,7 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// --- PostToolUse: disabled when guardNativePermissions is not set ---
+// --- PostToolUse: disabled when neither suggestOnPassthrough nor guardNativePermissions is set ---
 {
   const tmp = makeTmpWithConfig({
     permissions: {
@@ -821,7 +821,45 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
   const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
   const nativeAllow = (after.permissions?.allow || []) as string[];
-  assert(nativeAllow.includes("Bash(cowsay:*)"), "post: native rule kept when guardNativePermissions is not set");
+  assert(nativeAllow.includes("Bash(cowsay:*)"), "post: native rule kept when no suggest/guard enabled");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- PostToolUse: suggestOnPassthrough persists suggestion directly ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      suggestOnPassthrough: true,
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+  const settingsPath = path.join(tmp, ".claude", "settings.local.json");
+
+  // PostToolUse for a command with no matching regex → persists suggestion
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+
+  const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const regexAllow = (after.regexPermissions?.allow || []) as (string | { rule: string })[];
+
+  assert(
+    regexAllow.some((r) => typeof r === "object" && r.rule === "Bash(^cowsay\\s+hello\\b)"),
+    "post-suggest: regex persisted directly from suggestion",
+  );
+
+  // PostToolUse for a command that already matches → no duplicate
+  const before = fs.readFileSync(settingsPath, "utf8");
+  run({ tool_name: "Bash", tool_input: { command: "git status" }, cwd: tmp }, "post");
+  const after2 = fs.readFileSync(settingsPath, "utf8");
+  assert(before === after2, "post-suggest: matched command does not persist");
+
+  // PostToolUse again for same command → no duplicate
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+  const after3 = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const count = (after3.regexPermissions?.allow as unknown[]).filter((r: unknown) =>
+    typeof r === "object" && r !== null && (r as { rule: string }).rule === "Bash(^cowsay\\s+hello\\b)"
+  ).length;
+  assert(count === 1, "post-suggest: no duplicate on repeated approval");
 
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -461,6 +461,34 @@ function guardApprovedRule(filePath: string, toolName: string, content: string |
   debug(`PostToolUse: converted ${matchRule} → ${suggestion}`);
 }
 
+// Write a suggested regex rule directly to regexPermissions.allow
+function persistSuggestion(filePath: string, toolName: string, content: string | undefined): void {
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    json = {};
+  }
+
+  const suggestion = generateRegexSuggestion(toolName, content);
+
+  if (!json.regexPermissions) json.regexPermissions = {};
+  const rp = json.regexPermissions as RegexPermissionsConfig;
+  if (!rp.allow) rp.allow = [];
+
+  // Don't add duplicates
+  const existing = rp.allow as (string | RuleEntry)[];
+  const alreadyExists = existing.some((e) => {
+    const r = typeof e === "string" ? e : e.rule;
+    return r === suggestion;
+  });
+  if (alreadyExists) return;
+
+  existing.push({ rule: suggestion, reason: "Auto-added from approved suggestion" });
+  fs.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
+  debug(`PostToolUse: persisted suggestion ${suggestion}`);
+}
+
 // --- Main ---
 
 const mode = process.argv[2] || "pre";
@@ -487,7 +515,6 @@ async function main(): Promise<void> {
 }
 
 function handlePostToolUse(toolName: string, toolInput: Record<string, unknown>, cwd: string): void {
-  // Check merged config for guardNativePermissions (same sources as PreToolUse)
   const projectConfig = mergeConfigs(
     loadConfig(path.join(cwd, ".claude", "settings.json")),
     loadConfig(path.join(cwd, ".claude", "settings.local.json")),
@@ -498,12 +525,25 @@ function handlePostToolUse(toolName: string, toolInput: Record<string, unknown>,
     loadConfig(path.join(globalHome, "settings.local.json")),
   );
   const merged = mergeConfigs(projectConfig, globalConfig);
-  if (!merged.guardNativePermissions) return;
+  if (!merged.suggestOnPassthrough && !merged.guardNativePermissions) return;
 
-  // Always write to project settings.local.json
   const settingsPath = path.join(cwd, ".claude", "settings.local.json");
-  const content = getPrimaryContent(toolName, toolInput);
-  guardApprovedRule(settingsPath, toolName, content);
+
+  // Guard: convert native rules added by Claude Code
+  if (merged.guardNativePermissions) {
+    const content = getPrimaryContent(toolName, toolInput);
+    guardApprovedRule(settingsPath, toolName, content);
+  }
+
+  // Suggest: if this tool use had no matching regex rule, persist the suggestion
+  if (merged.suggestOnPassthrough) {
+    const rules = prepareRules(merged);
+    const content = getPrimaryContent(toolName, toolInput);
+    const result = evaluate(rules, toolName, content);
+    if (result === null) {
+      persistSuggestion(settingsPath, toolName, content);
+    }
+  }
 }
 
 function handlePreToolUse(toolName: string, toolInput: Record<string, unknown>, cwd: string | undefined): void {
