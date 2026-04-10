@@ -681,7 +681,7 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// --- suggestOnPassthrough: command with flags (second token starts with -) ---
+// --- suggestOnPassthrough: bash heuristics ---
 {
   const tmp = makeTmpWithConfig({
     regexPermissions: {
@@ -689,11 +689,45 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
       allow: [],
     },
   });
+
+  // Flags are skipped — only first token used
   {
     const result = run({ tool_name: "Bash", tool_input: { command: "ls -la /tmp" }, cwd: tmp });
     const r = reason(result);
     assert(r.includes("Bash(^ls\\\\b)"), "suggest: command with flags suggests first token only");
   }
+
+  // Path-like second token is skipped
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "cat /etc/hosts" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^cat\\\\b)"), "suggest: path argument skipped, only command suggested");
+  }
+
+  // Wrapper commands (env, nohup, time) are skipped
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "env FOO=bar node server.js" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^node\\\\b)"), "suggest: env + var assignment skipped, actual command suggested");
+  }
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "time git status" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^git\\\\s+status\\\\b)"), "suggest: wrapper 'time' skipped, git status suggested");
+  }
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "nohup python3 app.py" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^python3\\\\b)"), "suggest: wrapper 'nohup' skipped, python3 suggested");
+  }
+
+  // Bare env var assignment without wrapper
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "FOO=bar npm test" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^npm\\\\s+test\\\\b)"), "suggest: env var assignment skipped, npm test suggested");
+  }
+
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
