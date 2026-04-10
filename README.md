@@ -34,7 +34,6 @@ Add your regex rules under the `regexPermissions` key in your settings file. Thi
 {
   "regexPermissions": {
     "suggestOnPassthrough": true,
-    "guardNativePermissions": "auto",
     "deny": [
       { "rule": "Bash(^git\\s+push\\s+.*--force\\b(?!-))", "reason": "No force push" }
     ],
