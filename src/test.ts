@@ -16,8 +16,8 @@ function makeTmpWithConfig(config: object): string {
   return tmp;
 }
 
-function run(input: HookInput): HookOutput {
-  const result = execFileSync("node", [SCRIPT], {
+function run(input: HookInput, mode: string = "pre"): HookOutput {
+  const result = execFileSync("node", [SCRIPT, mode], {
     input: JSON.stringify(input),
     encoding: "utf8",
     timeout: 5000,
@@ -734,6 +734,94 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
     const r = reason(result);
     assert(r.includes("Bash(^systemctl\\\\s+restart\\\\b)"), "suggest: wrapper 'sudo' skipped, actual command suggested");
   }
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- PostToolUse: guardApprovedRule ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["Edit", "Read"],
+    },
+    regexPermissions: {
+      guardNativePermissions: "auto",
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+  const settingsPath = path.join(tmp, ".claude", "settings.local.json");
+
+  // Simulate Claude Code adding a native rule after user approval
+  const data = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  data.permissions.allow.push("Bash(cowsay:*)");
+  fs.writeFileSync(settingsPath, JSON.stringify(data));
+
+  // Run PostToolUse — should convert the just-approved rule
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+
+  const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const nativeAllow = (after.permissions?.allow || []) as string[];
+  const regexAllow = (after.regexPermissions?.allow || []) as (string | { rule: string })[];
+
+  assert(!nativeAllow.includes("Bash(cowsay:*)"), "post: native Bash(cowsay:*) removed");
+  assert(nativeAllow.includes("Edit"), "post: bare Edit kept");
+  assert(nativeAllow.includes("Read"), "post: bare Read kept");
+  assert(
+    regexAllow.some((r) => typeof r === "object" && r.rule === "Bash(^cowsay\\b)"),
+    "post: regex Bash(^cowsay\\b) added to regexPermissions",
+  );
+
+  // Run PostToolUse again for unrelated tool — should not change anything
+  const before2 = fs.readFileSync(settingsPath, "utf8");
+  run({ tool_name: "Bash", tool_input: { command: "git status" }, cwd: tmp }, "post");
+  const after2 = fs.readFileSync(settingsPath, "utf8");
+  assert(before2 === after2, "post: unrelated tool use does not modify file");
+
+  // PostToolUse with no native rule to convert — no-op
+  run({ tool_name: "Bash", tool_input: { command: "unknown-cmd" }, cwd: tmp }, "post");
+  const after3 = fs.readFileSync(settingsPath, "utf8");
+  assert(before2 === after3, "post: no matching native rule is a no-op");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- PostToolUse: prefix match must be exact (no substring) ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["Bash(cow:*)"],
+    },
+    regexPermissions: {
+      guardNativePermissions: "auto",
+    },
+  });
+  const settingsPath = path.join(tmp, ".claude", "settings.local.json");
+
+  // "cowsay hello" should NOT match "cow:*" because "cowsay" != "cow" and doesn't start with "cow "
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+  const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const nativeAllow = (after.permissions?.allow || []) as string[];
+  assert(nativeAllow.includes("Bash(cow:*)"), "post: Bash(cow:*) NOT removed for cowsay (no substring match)");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- PostToolUse: disabled when guardNativePermissions is not set ---
+{
+  const tmp = makeTmpWithConfig({
+    permissions: {
+      allow: ["Bash(cowsay:*)"],
+    },
+    regexPermissions: {
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+  const settingsPath = path.join(tmp, ".claude", "settings.local.json");
+
+  run({ tool_name: "Bash", tool_input: { command: "cowsay hello" }, cwd: tmp }, "post");
+  const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const nativeAllow = (after.permissions?.allow || []) as string[];
+  assert(nativeAllow.includes("Bash(cowsay:*)"), "post: native rule kept when guardNativePermissions is not set");
 
   fs.rmSync(tmp, { recursive: true, force: true });
 }

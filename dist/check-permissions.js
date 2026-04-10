@@ -243,7 +243,7 @@ function generateRegexSuggestion(toolName, content) {
     return toolName;
 }
 // --- Native permissions guard ---
-const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\(.+\)$/;
+const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\((.+)\)$/;
 function suggestRegex(native) {
     const m = native.match(/^([\w|]+)\((.+)\)$/);
     if (!m)
@@ -351,9 +351,7 @@ function guardApprovedRule(filePath, toolName, content) {
         if (typeof rule !== "string")
             continue;
         // Must be a managed tool pattern: Tool(...)
-        if (!MANAGED_TOOL_RE.test(rule))
-            continue;
-        const m = rule.match(/^(\w+)\((.+)\)$/);
+        const m = rule.match(MANAGED_TOOL_RE);
         if (!m)
             continue;
         const [, entryTool, entryPattern] = m;
@@ -362,7 +360,7 @@ function guardApprovedRule(filePath, toolName, content) {
         // Check if this native rule matches the current content
         // Native rules are either exact or prefix (:*)
         const prefix = entryPattern.replace(/:\*$/, "");
-        if (content && (content === prefix || content.startsWith(prefix + " ") || content.startsWith(prefix))) {
+        if (content && (content === prefix || content.startsWith(prefix + " "))) {
             matchIdx = i;
             matchRule = rule;
             break;
@@ -401,24 +399,32 @@ async function main() {
         return;
     }
     const { tool_name, tool_input, cwd } = input;
-    if (!tool_name || !cwd)
+    if (!tool_name)
         return;
     if (mode === "post") {
+        if (!cwd)
+            return;
         return handlePostToolUse(tool_name, tool_input, cwd);
     }
     return handlePreToolUse(tool_name, tool_input, cwd);
 }
 function handlePostToolUse(toolName, toolInput, cwd) {
-    // Load config to check if guardNativePermissions is enabled
-    const settingsPath = path_1.default.join(cwd, ".claude", "settings.local.json");
-    const config = loadConfig(settingsPath);
-    if (!config?.guardNativePermissions)
+    // Check merged config for guardNativePermissions (same sources as PreToolUse)
+    const projectConfig = mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")));
+    const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
+    const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
+    const merged = mergeConfigs(projectConfig, globalConfig);
+    if (!merged.guardNativePermissions)
         return;
+    // Always write to project settings.local.json
+    const settingsPath = path_1.default.join(cwd, ".claude", "settings.local.json");
     const content = getPrimaryContent(toolName, toolInput);
     guardApprovedRule(settingsPath, toolName, content);
 }
 function handlePreToolUse(toolName, toolInput, cwd) {
-    const projectConfig = mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")));
+    const projectConfig = cwd
+        ? mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")))
+        : null;
     const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
