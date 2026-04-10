@@ -30,6 +30,10 @@ function decision(result: HookOutput): string {
   return result?.hookSpecificOutput?.permissionDecision || "passthrough";
 }
 
+function reason(result: HookOutput): string {
+  return result?.hookSpecificOutput?.permissionDecisionReason || "";
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -593,6 +597,103 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
     "guard-auto-merge: auto wins over true, regex rule auto-added",
   );
 
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- suggestOnPassthrough ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      suggestOnPassthrough: true,
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+
+  // Matched rules still work normally
+  test("suggest: matched allow rule still returns allow",
+    { tool_name: "Bash", tool_input: { command: "git status" } },
+    "allow", tmp);
+
+  // Unmatched command returns ask with suggestion
+  test("suggest: unmatched bash command returns ask",
+    { tool_name: "Bash", tool_input: { command: "gh api repos/foo/bar" } },
+    "ask", tmp);
+
+  // Check the suggestion contains a regex pattern
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "gh api repos/foo/bar" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^gh\\\\s+api\\\\b)"), "suggest: bash suggestion contains correct regex");
+  }
+
+  // Single-token command
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "htop" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^htop\\\\b)"), "suggest: single command gets word-boundary regex");
+  }
+
+  // Edit tool suggests by extension
+  {
+    const result = run({ tool_name: "Edit", tool_input: { file_path: "/project/src/index.ts" }, cwd: tmp });
+    assert(decision(result) === "ask", "suggest: unmatched Edit returns ask");
+    const r = reason(result);
+    assert(r.includes("Edit(\\\\.ts$)"), "suggest: Edit suggestion uses file extension");
+  }
+
+  // WebFetch suggests by domain
+  {
+    const result = run({ tool_name: "WebFetch", tool_input: { url: "https://api.github.com/repos/foo" }, cwd: tmp });
+    assert(decision(result) === "ask", "suggest: unmatched WebFetch returns ask");
+    const r = reason(result);
+    assert(r.includes("api\\\\.github\\\\.com"), "suggest: WebFetch suggestion contains escaped domain");
+  }
+
+  // MCP tool suggests tool-name-only
+  {
+    const result = run({ tool_name: "mcp__github__create_issue", tool_input: { title: "bug" }, cwd: tmp });
+    assert(decision(result) === "ask", "suggest: unmatched MCP tool returns ask");
+    const r = reason(result);
+    assert(r.includes("mcp__github__create_issue"), "suggest: MCP suggestion is tool-name-only");
+  }
+
+  // Grep/Glob suggests (.*)
+  {
+    const result = run({ tool_name: "Grep", tool_input: { pattern: "TODO" }, cwd: tmp });
+    assert(decision(result) === "ask", "suggest: unmatched Grep returns ask");
+    const r = reason(result);
+    assert(r.includes("Grep(.*)"), "suggest: Grep suggestion is catch-all");
+  }
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- suggestOnPassthrough: disabled by default ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      allow: ["Bash(^git\\s+status)"],
+    },
+  });
+  test("suggest: passthrough when suggestOnPassthrough is not set",
+    { tool_name: "Bash", tool_input: { command: "gh api repos/foo" } },
+    "passthrough", tmp);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- suggestOnPassthrough: command with flags (second token starts with -) ---
+{
+  const tmp = makeTmpWithConfig({
+    regexPermissions: {
+      suggestOnPassthrough: true,
+      allow: [],
+    },
+  });
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "ls -la /tmp" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^ls\\\\b)"), "suggest: command with flags suggests first token only");
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

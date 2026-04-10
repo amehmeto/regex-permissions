@@ -21,6 +21,7 @@ interface ParsedRule {
 interface RegexPermissionsConfig {
   requireReason?: boolean;
   guardNativePermissions?: boolean | "auto";
+  suggestOnPassthrough?: boolean;
   deny?: (string | RuleEntry)[];
   ask?: (string | RuleEntry)[];
   allow?: (string | RuleEntry)[];
@@ -135,7 +136,7 @@ function loadConfig(filePath: string): RegexPermissionsConfig | null {
   return config;
 }
 
-const KNOWN_CONFIG_KEYS = new Set(["requireReason", "guardNativePermissions", "deny", "ask", "allow"]);
+const KNOWN_CONFIG_KEYS = new Set(["requireReason", "guardNativePermissions", "suggestOnPassthrough", "deny", "ask", "allow"]);
 
 function validateConfig(config: RegexPermissionsConfig, filePath: string): void {
   for (const key of Object.keys(config)) {
@@ -164,6 +165,7 @@ function mergeConfigs(
       a.guardNativePermissions === "auto" || b.guardNativePermissions === "auto"
         ? "auto"
         : a.guardNativePermissions || b.guardNativePermissions,
+    suggestOnPassthrough: a.suggestOnPassthrough || b.suggestOnPassthrough,
     deny: (a.deny || []).concat(b.deny || []),
     ask: (a.ask || []).concat(b.ask || []),
     allow: (a.allow || []).concat(b.allow || []),
@@ -252,6 +254,50 @@ function evaluate(
   return null;
 }
 
+// --- Regex suggestion ---
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function generateRegexSuggestion(toolName: string, content: string | undefined): string {
+  if (!content) return toolName;
+
+  if (toolName === "Bash") {
+    const firstLine = content.includes("\n") ? content.split("\n")[0].trim() : content;
+    const tokens = firstLine.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return `Bash(.*)`;
+
+    if (tokens.length >= 2 && /^[a-zA-Z]/.test(tokens[1])) {
+      return `Bash(^${escapeRegex(tokens[0])}\\s+${escapeRegex(tokens[1])}\\b)`;
+    }
+    return `Bash(^${escapeRegex(tokens[0])}\\b)`;
+  }
+
+  if (toolName === "Edit" || toolName === "Write" || toolName === "Read") {
+    const extMatch = content.match(/\.(\w+)$/);
+    if (extMatch) {
+      return `${toolName}(\\.${extMatch[1]}$)`;
+    }
+    return `${toolName}(.*)`;
+  }
+
+  if (toolName === "WebFetch") {
+    const urlMatch = content.match(/^https?:\/\/([^/]+)/);
+    if (urlMatch) {
+      const domain = escapeRegex(urlMatch[1]);
+      return `${toolName}(^https?://${domain}(/|$))`;
+    }
+    return `${toolName}(.*)`;
+  }
+
+  if (toolName === "Grep" || toolName === "Glob" || toolName === "WebSearch") {
+    return `${toolName}(.*)`;
+  }
+
+  return toolName;
+}
+
 // --- Native permissions guard ---
 
 const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\(.+\)$/;
@@ -264,14 +310,14 @@ function suggestRegex(native: string): string {
   // Handle WebFetch domain: prefix → URL regex
   const domainMatch = rawPattern.match(/^domain:(.+)$/);
   if (domainMatch) {
-    const domain = domainMatch[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const domain = escapeRegex(domainMatch[1]);
     return `${tool}(^https?://${domain}(/|$))`;
   }
 
   let core = rawPattern.replace(/[:*]+$/, "").trimEnd();
   const segments = core.split(/\*+/);
   core = segments
-    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .map((s) => escapeRegex(s))
     .join(".*");
   core = core.replace(/(\.\*)+/g, ".*");
   core = core.replace(/ +/g, "\\s+");
@@ -392,12 +438,28 @@ async function main(): Promise<void> {
 
   const rules = prepareRules(merged);
 
-  if (!rules.deny.length && !rules.ask.length && !rules.allow.length) return;
+  if (!rules.deny.length && !rules.ask.length && !rules.allow.length && !merged.suggestOnPassthrough) return;
 
   debug(`Loaded ${rules.deny.length} deny, ${rules.ask.length} ask, ${rules.allow.length} allow rules`);
 
   const result = evaluate(rules, tool_name, tool_input);
-  if (!result) return;
+
+  if (!result) {
+    if (merged.suggestOnPassthrough) {
+      const content = getPrimaryContent(tool_name, tool_input);
+      const suggestion = generateRegexSuggestion(tool_name, content);
+      debug(`SUGGEST ${tool_name} → ${suggestion}`);
+      const output: HookOutput = {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "ask",
+          permissionDecisionReason: `No matching regex rule. Suggested: ${JSON.stringify(suggestion)}`,
+        },
+      };
+      process.stdout.write(JSON.stringify(output) + "\n");
+    }
+    return;
+  }
 
   const output: HookOutput = {
     hookSpecificOutput: {
