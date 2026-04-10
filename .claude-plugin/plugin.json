@@ -1,6 +1,6 @@
 {
   "name": "regex-permissions",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Regex-based permission rules for Claude Code — collapse hundreds of literal allow/deny/ask rules into compact patterns",
   "author": {
     "name": "amehmeto"
