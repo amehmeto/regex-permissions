@@ -728,6 +728,13 @@ function readSettingsAfterRun(tmp: string): Record<string, unknown> {
     assert(r.includes("Bash(^npm\\\\s+test\\\\b)"), "suggest: env var assignment skipped, npm test suggested");
   }
 
+  // sudo is treated as a wrapper — suggests the actual command
+  {
+    const result = run({ tool_name: "Bash", tool_input: { command: "sudo systemctl restart nginx" }, cwd: tmp });
+    const r = reason(result);
+    assert(r.includes("Bash(^systemctl\\\\s+restart\\\\b)"), "suggest: wrapper 'sudo' skipped, actual command suggested");
+  }
+
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

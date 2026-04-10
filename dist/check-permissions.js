@@ -197,6 +197,7 @@ function evaluate(rules, toolName, content) {
     return null;
 }
 // --- Regex suggestion ---
+const BASH_WRAPPERS = /^(env|nohup|time|nice|ionice|timeout|sudo)$/;
 function escapeRegex(s) {
     return s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -208,10 +209,9 @@ function generateRegexSuggestion(toolName, content) {
         const tokens = firstLine.split(/\s+/).filter(Boolean);
         if (tokens.length === 0)
             return `Bash(.*)`;
-        // Skip wrapper commands (env, nohup, time, etc.) and env var assignments (FOO=bar)
+        // Skip wrapper commands (env, nohup, time, sudo, etc.) and env var assignments (FOO=bar)
         let cmdIdx = 0;
-        const WRAPPERS = /^(env|nohup|time|nice|ionice|timeout)$/;
-        while (cmdIdx < tokens.length - 1 && (WRAPPERS.test(tokens[cmdIdx]) || /^\w+=/.test(tokens[cmdIdx]))) {
+        while (cmdIdx < tokens.length - 1 && (BASH_WRAPPERS.test(tokens[cmdIdx]) || /^\w+=/.test(tokens[cmdIdx]))) {
             cmdIdx++;
         }
         const cmd = tokens[cmdIdx];
