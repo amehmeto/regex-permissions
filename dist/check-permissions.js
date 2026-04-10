@@ -243,7 +243,7 @@ function generateRegexSuggestion(toolName, content) {
     return toolName;
 }
 // --- Native permissions guard ---
-const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\(.+\)$/;
+const MANAGED_TOOL_RE = /^(Bash|Edit|Write|Read|WebFetch|Grep|Glob|WebSearch)\((.+)\)$/;
 function suggestRegex(native) {
     const m = native.match(/^([\w|]+)\((.+)\)$/);
     if (!m)
@@ -318,16 +318,75 @@ function guardNativePermissions(filePath, autoAdd) {
     fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
     for (const { entry, suggestion } of removed) {
         if (autoAdd) {
-            process.stderr.write(`[regex-permissions] Converted native allow: ${entry} → { "rule": ${JSON.stringify(suggestion)} }\n`);
+            debug(`Converted native allow: ${entry} → { "rule": ${JSON.stringify(suggestion)} }`);
         }
         else {
-            process.stderr.write(`[regex-permissions] Removed native allow: ${entry}\n` +
-                `  → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }\n`);
+            debug(`Removed native allow: ${entry} → Add to regexPermissions.allow: { "rule": ${JSON.stringify(suggestion)}, "reason": "..." }`);
         }
     }
     return addedRules;
 }
+// Convert a single just-approved native rule matching this tool use
+function guardApprovedRule(filePath, toolName, content) {
+    // Re-read from disk (Claude Code may have just written to it)
+    let json;
+    try {
+        json = JSON.parse(fs_1.default.readFileSync(filePath, "utf8"));
+    }
+    catch {
+        return;
+    }
+    const perms = json.permissions;
+    if (!perms)
+        return;
+    const allowEntries = perms.allow;
+    if (!Array.isArray(allowEntries))
+        return;
+    // Find the native entry that matches this tool use
+    let matchIdx = -1;
+    let matchRule = "";
+    for (let i = 0; i < allowEntries.length; i++) {
+        const entry = allowEntries[i];
+        const rule = typeof entry === "string" ? entry : entry?.rule;
+        if (typeof rule !== "string")
+            continue;
+        // Must be a managed tool pattern: Tool(...)
+        const m = rule.match(MANAGED_TOOL_RE);
+        if (!m)
+            continue;
+        const [, entryTool, entryPattern] = m;
+        if (entryTool !== toolName)
+            continue;
+        // Check if this native rule matches the current content
+        // Native rules are either exact or prefix (:*)
+        const prefix = entryPattern.replace(/:\*$/, "");
+        if (content && (content === prefix || content.startsWith(prefix + " "))) {
+            matchIdx = i;
+            matchRule = rule;
+            break;
+        }
+    }
+    if (matchIdx === -1)
+        return;
+    const suggestion = suggestRegex(matchRule);
+    // Remove from permissions.allow
+    allowEntries.splice(matchIdx, 1);
+    if (allowEntries.length === 0)
+        delete perms.allow;
+    if (Object.keys(perms).length === 0)
+        delete json.permissions;
+    // Add to regexPermissions.allow
+    if (!json.regexPermissions)
+        json.regexPermissions = {};
+    const rp = json.regexPermissions;
+    if (!rp.allow)
+        rp.allow = [];
+    rp.allow.push({ rule: suggestion, reason: "Auto-converted from native permissions" });
+    fs_1.default.writeFileSync(filePath, JSON.stringify(json, null, 2) + "\n");
+    debug(`PostToolUse: converted ${matchRule} → ${suggestion}`);
+}
 // --- Main ---
+const mode = process.argv[2] || "pre";
 async function main() {
     let input;
     try {
@@ -342,12 +401,34 @@ async function main() {
     const { tool_name, tool_input, cwd } = input;
     if (!tool_name)
         return;
+    if (mode === "post") {
+        if (!cwd)
+            return;
+        return handlePostToolUse(tool_name, tool_input, cwd);
+    }
+    return handlePreToolUse(tool_name, tool_input, cwd);
+}
+function handlePostToolUse(toolName, toolInput, cwd) {
+    // Check merged config for guardNativePermissions (same sources as PreToolUse)
+    const projectConfig = mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")));
+    const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
+    const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
+    const merged = mergeConfigs(projectConfig, globalConfig);
+    if (!merged.guardNativePermissions)
+        return;
+    // Always write to project settings.local.json
+    const settingsPath = path_1.default.join(cwd, ".claude", "settings.local.json");
+    const content = getPrimaryContent(toolName, toolInput);
+    guardApprovedRule(settingsPath, toolName, content);
+}
+function handlePreToolUse(toolName, toolInput, cwd) {
     const projectConfig = cwd
         ? mergeConfigs(loadConfig(path_1.default.join(cwd, ".claude", "settings.json")), loadConfig(path_1.default.join(cwd, ".claude", "settings.local.json")))
         : null;
     const globalHome = path_1.default.join(os_1.default.homedir(), ".claude");
     const globalConfig = mergeConfigs(loadConfig(path_1.default.join(globalHome, "settings.json")), loadConfig(path_1.default.join(globalHome, "settings.local.json")));
     const merged = mergeConfigs(projectConfig, globalConfig);
+    // Bulk guard: clean up any leftover native entries (PreToolUse)
     if (merged.guardNativePermissions && cwd) {
         const autoAdd = merged.guardNativePermissions === "auto";
         const added = guardNativePermissions(path_1.default.join(cwd, ".claude", "settings.local.json"), autoAdd);
@@ -359,12 +440,12 @@ async function main() {
     if (!rules.deny.length && !rules.ask.length && !rules.allow.length && !merged.suggestOnPassthrough)
         return;
     debug(`Loaded ${rules.deny.length} deny, ${rules.ask.length} ask, ${rules.allow.length} allow rules`);
-    const content = getPrimaryContent(tool_name, tool_input);
-    const result = evaluate(rules, tool_name, content);
+    const content = getPrimaryContent(toolName, toolInput);
+    const result = evaluate(rules, toolName, content);
     if (!result) {
         if (merged.suggestOnPassthrough) {
-            const suggestion = generateRegexSuggestion(tool_name, content);
-            debug(`SUGGEST ${tool_name} → ${suggestion}`);
+            const suggestion = generateRegexSuggestion(toolName, content);
+            debug(`SUGGEST ${toolName} → ${suggestion}`);
             const output = {
                 hookSpecificOutput: {
                     hookEventName: "PreToolUse",

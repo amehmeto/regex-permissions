@@ -6,7 +6,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/check-permissions.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/check-permissions.js\" pre",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/check-permissions.js\" post",
             "timeout": 5
           }
         ]
